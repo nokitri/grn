@@ -2,18 +2,19 @@ import { createClock, SCALE } from './clock.js';
 import { createRun, phaseAt, bpmAt, RUN_SECONDS } from './phase.js';
 import { createAudio } from './audio.js';
 import { VOICES } from './voices.js';
-import { createProgress, gainXp, xpToNext } from './upgrades.js';
+import { createProgress, gainXp, xpToNext, rollChoices, applyChoice } from './upgrades.js';
 import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
 import { createDraw } from './draw.js';
 const c = document.getElementById('game'), g = c.getContext('2d'), d = createDraw(g);
 const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results');
+const levelup = document.getElementById('levelup'), cardsEl = document.getElementById('cards');
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
 let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
-let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, last = 0;
+let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, picking = false, cards = [], last = 0;
 let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, finalDrop = false;
 const enemies = [], shots = [], queue = [], gems = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
@@ -54,7 +55,7 @@ function onStep(step, time, dur) {
     if (!v.pattern(level)[s] || (name === 'kick' && phase !== 'drop')) continue;
     if (name === 'kick') audio.kick(time);
     else audio.play(v.patch, v.note(s, bar, level), time, { dur: name === 'pad' ? dur * 16 : dur, vel: 0.3 * (phase === 'drop' ? 1 : 0.4) });
-    queue.push({ time, v, level });
+    if (!picking) queue.push({ time, v, level });
   }
 }
 
@@ -178,10 +179,11 @@ addEventListener('resize', size); size();
 function frame(t) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
-  const live = !paused && !gameOver;
+  if (levelsPending > 0 && !picking && !paused && !gameOver) openPick();
+  const live = !paused && !gameOver && !picking;
+  if (!paused && !gameOver) clock.tick(); // music keeps going while picking
   if (live) {
     run.elapsed += dt;
-    clock.tick();
     const m = readMove();
     if (m.x || m.y) { const n = Math.hypot(m.x, m.y); dir.x = m.x / n; dir.y = m.y / n; }
     const k = 1 - Math.exp(-dt * 6); beamDir.x += (dir.x - beamDir.x) * k; beamDir.y += (dir.y - beamDir.y) * k;
@@ -209,7 +211,7 @@ function reset() {
   for (const a of [enemies, shots, queue, gems, hostile]) a.length = 0;
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun();
   run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
-  lastPhase = null; cycle = 0; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
+  lastPhase = null; cycle = 0; picking = false; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
   player.x = w / 2; player.y = h / 2;
   clock.start();
 }
@@ -234,3 +236,31 @@ const togglePause = () => {
 };
 onPause(togglePause);
 document.addEventListener('visibilitychange', () => { if (document.hidden && !paused) togglePause(); });
+
+const DESCRIPTIONS = {
+  kick: 'shockwave ring', arp: 'aimed bolts', bass: 'piercing pulse', lead: 'sweeping beam', pad: 'slowing field', hats: 'spark burst',
+  reverb: '+15% area', delay: 'shots echo', distortion: '+damage', unison: 'extra shots', filter: 'sharper hits', sidechain: 'pushes enemies on kick',
+};
+const KIND = { voice: 'new voice', voiceUp: 'voice', fx: 'new fx', fxUp: 'fx', evolve: 'evolve', heal: 'heal' };
+function cardHtml(c, i) {
+  if (c.kind === 'heal') return `<b>${i + 1}. heal</b><span>heal</span><span>+20% harmony</span>`;
+  const line = c.kind === 'evolve' ? `${c.name} → ${c.to}` : `lvl ${c.from}→${c.to}</span><span>${DESCRIPTIONS[c.name] || ''}`;
+  return `<b>${i + 1}. ${c.name}</b><span>${KIND[c.kind]}</span><span>${line}</span>`;
+}
+function openPick() {
+  picking = true; queue.length = 0;
+  cards = rollChoices(progress, Math.random);
+  cardsEl.innerHTML = cards.map((c, i) => `<button class="card" type="button" data-i="${i}">${cardHtml(c, i)}</button>`).join('');
+  levelup.hidden = false;
+  audio.setFilter(0.25, ac.currentTime);
+}
+function choose(i) {
+  const c = cards[i];
+  if (!picking || paused || !c) return;
+  if (c.kind === 'heal') { run.harmony = Math.min(1, run.harmony + 0.2); audio.detune(1 - run.harmony); } else applyChoice(progress, c);
+  levelsPending--; picking = false; levelup.hidden = true;
+  audio.setFilter(lastPhase === 'drop' ? 1 : 0.2, ac.currentTime); // shortcut: build snaps to 0.2, its per-step ramp corrects on the next step
+  if (levelsPending > 0) openPick();
+}
+cardsEl.addEventListener('click', e => { const b = e.target.closest('.card'); if (b) choose(+b.dataset.i); });
+addEventListener('keydown', e => { if (!e.repeat && e.key >= '1' && e.key <= '3') choose(e.key - 1); });

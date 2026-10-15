@@ -20,6 +20,13 @@ body { background: var(--bg); color: var(--fg); font: 20px/1.3 "VT323", ui-monos
 #start p { animation: blink 1.2s steps(2) infinite; }
 @keyframes blink { 50% { opacity: .35; } }
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 10; background: linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,.35) 50%) 0 0 / 100% 3px; }
+#pause { z-index: 2; }
+#levelup { width: min(92vw, 640px); }
+#cards { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.card { flex: 1 1 160px; font: inherit; color: var(--fg); background: transparent; text-shadow: inherit; border: 2px solid var(--fg); border-radius: 20px; padding: 12px; cursor: pointer; box-shadow: 0 0 8px var(--fg); }
+.card:hover, .card:focus-visible { background: var(--fg); color: var(--bg); text-shadow: none; outline: none; }
+.card b { display: block; font-size: 28px; font-weight: 400; }
+.card span { display: block; opacity: .8; }
 @media (prefers-reduced-motion: reduce) { #start p { animation: none; } }
 </style>
 </head>
@@ -27,6 +34,7 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-i
 <canvas id="game" aria-hidden="true"></canvas>
 <section id="start" class="panel"><h1>grn</h1><p>tap / click to start</p></section>
 <section id="pause" class="panel" hidden><h2>paused</h2></section>
+<section id="levelup" class="panel" hidden><h2>level up</h2><div id="cards"></div></section>
 <section id="results" class="panel" hidden><h2>results</h2></section>
 <script type="module" src="js/main.js"></script>
 </body>
