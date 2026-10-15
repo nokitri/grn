@@ -10,7 +10,7 @@ if (typeof window !== 'undefined') {
   addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
   addEventListener('blur', () => { keys.clear(); t0 = null; tv = { x: 0, y: 0 }; });
   addEventListener('touchstart', e => {
-    if (e.touches.length > 1) { pause(); t0 = null; tv = { x: 0, y: 0 }; return; }
+    if (e.touches.length === 2) { pause(); t0 = null; tv = { x: 0, y: 0 }; return; }
     t0 = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   }, { passive: true });
   addEventListener('touchmove', e => {

@@ -194,7 +194,7 @@ function frame(t) {
 
 function reset() {
   for (const a of [enemies, shots, queue, orbs, hostile]) a.length = 0;
-  d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime);
+  d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun();
   run = createRun(); loadout = createLoadout(); audio.detune(0);
   lastPhase = null; cycle = 0; invuln = 0; gameOver = false; results.hidden = true;
   player.x = w / 2; player.y = h / 2;
@@ -214,8 +214,10 @@ addEventListener('pointerdown', begin); addEventListener('keydown', begin);
 const again = () => { if (gameOver && performance.now() - endedAt > 500) reset(); };
 addEventListener('pointerdown', again); addEventListener('keydown', again); // ignore keys held during play
 
-onPause(() => {
+const togglePause = () => {
   if (!run || gameOver) return;
   paused = !paused; pauseEl.hidden = !paused;
   if (paused) ac.suspend(); else ac.resume();
-});
+};
+onPause(togglePause);
+document.addEventListener('visibilitychange', () => { if (document.hidden && !paused) togglePause(); });

@@ -4,9 +4,13 @@ export function createAudio(ac) {
   const master = ac.createGain(); master.gain.value = 0.5;
   const comp = ac.createDynamicsCompressor();
   master.connect(comp).connect(ac.destination);
-  const duck = ac.createGain(), filt = ac.createBiquadFilter();
-  filt.type = 'lowpass'; filt.frequency.value = 18000;
-  duck.connect(filt).connect(master);
+  let bus, duck, filt;
+  const build = () => {
+    bus = ac.createGain(); duck = ac.createGain(); filt = ac.createBiquadFilter();
+    filt.type = 'lowpass'; filt.frequency.value = 18000;
+    duck.connect(filt).connect(bus).connect(master);
+  };
+  build();
   let wobble = 0;
 
   const noise = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
@@ -14,12 +18,12 @@ export function createAudio(ac) {
   for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
 
   // gain env -> dest; returns the gain node for the source to feed
-  const env = (t, dur, peak, attack = 0.004, dest = duck) => {
+  const env = (t, dur, peak, attack = 0.004, dest = null) => {
     const e = ac.createGain();
     e.gain.setValueAtTime(0, t);
     e.gain.linearRampToValueAtTime(peak, t + attack);
     e.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(dur, attack + 0.01));
-    e.connect(dest);
+    e.connect(dest || duck);
     return e;
   };
   const osc = (type, hz, cents, t, end, out) => {
@@ -53,7 +57,7 @@ export function createAudio(ac) {
       const o = ac.createOscillator(); o.type = 'sine';
       o.frequency.setValueAtTime(150, time);
       o.frequency.exponentialRampToValueAtTime(45, time + 0.12);
-      o.connect(env(time, 0.3, 0.9, 0.003, master)); o.start(time); o.stop(time + 0.35);
+      o.connect(env(time, 0.3, 0.9, 0.003, bus)); o.start(time); o.stop(time + 0.35);
       duck.gain.cancelScheduledValues(time);
       duck.gain.setValueAtTime(1, time);
       duck.gain.linearRampToValueAtTime(0.3, time + 0.01);
@@ -86,5 +90,6 @@ export function createAudio(ac) {
       filt.frequency.setTargetAtTime(300 * 60 ** Math.min(1, Math.max(0, v)), time, 0.02);
     },
     detune(a) { wobble = a; },
+    newRun() { bus.disconnect(); build(); }, // silences leftover scheduled sources
   };
 }
