@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { load, save, checkUnlocks } from '../js/save.js';
 
-const D = { unlocked: ['kick', 'arp'], best: 0 };
+const D = { unlocked: ['kick', 'arp'], best: 0, vinyl: 0, ranks: {}, start: 'kick' };
 test('defaults on corrupt or missing data', () => {
   assert.deepEqual(load({ getItem: () => '{nope', setItem() {} }), D);
   assert.deepEqual(load({ getItem() { throw new Error(); } }), D);
@@ -25,11 +25,11 @@ test('unlock boundaries', () => {
 });
 test('v1 save still loads', () => {
   const s = { getItem: () => JSON.stringify({ unlocked: ['kick','arp','bass'], best: 4 }) };
-  assert.deepEqual(load(s), { unlocked: ['kick','arp','bass'], best: 4 });
+  assert.deepEqual(load(s), { unlocked: ['kick','arp','bass'], best: 4, vinyl: 0, ranks: {}, start: 'kick' });
 });
 test('load sanitizes unlocked and best', () => {
   const s = v => ({ getItem: () => JSON.stringify(v) });
-  assert.deepEqual(load(s({ unlocked: ['arp', 'bass', 'bass', '<b>x</b>'], best: 2 })), { unlocked: ['kick', 'arp', 'bass'], best: 2 });
+  assert.deepEqual(load(s({ unlocked: ['arp', 'bass', 'bass', '<b>x</b>'], best: 2 })), { unlocked: ['kick', 'arp', 'bass'], best: 2, vinyl: 0, ranks: {}, start: 'kick' });
   assert.deepEqual(load(s({ unlocked: [], best: -1 })), D);
 });
 test('analyzer unlocks at 7:30', async () => {

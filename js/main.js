@@ -7,6 +7,7 @@ import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
 import { createDraw } from './draw.js';
+import { SHOP, cost, buy, vinylFor, bonuses } from './shop.js';
 import { CHUNK, chunkObjects, pillarUp, pushOut, rollPowerup } from './world.js';
 const c = document.getElementById('game'), g = c.getContext('2d'), d = createDraw(g);
 const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results'), hud = document.getElementById('hud');
@@ -25,6 +26,7 @@ const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; 
 const broken = new Map(), pickups = []; // speaker id → hp left (0 = broken)
 const buff = { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false }; // seconds left
 let objs = { pillars: [], speakers: [] }, keyStep = 0;
+let bon = bonuses({}), rerolls = 0, revive = false; // meta-shop buffs for this run
 const spec = new Uint8Array(64); // live spectrum, refreshed each frame
 const specAt = a => spec[Math.floor(((a + Math.PI) / (2 * Math.PI)) * 32) % 32]; // angle → bin of the low half
 function around() { // objects in the 3×3 chunks around the player
@@ -104,7 +106,7 @@ function playVoices(s, bar, phase, dur, time) {
 function fire(o) {
   const { v, level, step } = o, st = stats(progress), x = player.x, y = player.y;
   if (buff.double > 0 && !o.echo) { queue.push({ ...o, time: o.time + clock.stepDur(), echo: true }); queue.sort((p, q) => p.time - q.time); }
-  const dmg = v.damage(level) * (st.damage + (step % 4 === 0 ? st.kickBonus : 0)) * (o.mult || 1);
+  const dmg = bon.damage * v.damage(level) * (st.damage + (step % 4 === 0 ? st.kickBonus : 0)) * (o.mult || 1);
   const shot = (vx, vy, life, kind, fx) => shots.push({ x, y, vx, vy, dmg, life, kind, level, area: st.area, ...fx });
   const fan = (vx, vy, life, kind, fx) => { // projectiles: velocity scaled, extra copies at ±12°, ±24°...
     for (let k = 0; k <= st.extraShots; k++) {
@@ -183,7 +185,8 @@ function updateShots(dt) {
 function hurt() {
   if (invuln > 0 || gameOver) return;
   invuln = 1;
-  const over = run.hit(0.1);
+  let over = run.hit(0.1 / bon.harmony); // headroom: more max harmony = smaller hits
+  if (over && revive) { revive = false; over = false; run.over = false; run.harmony = 0.5; if (!still) cam.punch = 0.2; d.kickFlash(); } // second encore
   audio.detune(1 - run.harmony);
   if (over) endRun();
 }
@@ -196,14 +199,28 @@ const mmss = s => { s = Math.floor(s); return String(Math.floor(s / 60)).padStar
 
 function showResults() {
   const fresh = checkUnlocks(data, { seconds: run.elapsed, won: run.won, evolved: progress.evolved.size });
-  data.unlocked.push(...fresh); data.best = Math.max(data.best, Math.floor(run.elapsed)); save(store, data);
+  const earned = vinylFor({ seconds: run.elapsed, drops: run.drops, won: run.won });
+  data.unlocked.push(...fresh); data.best = Math.max(data.best, Math.floor(run.elapsed)); data.vinyl += earned; save(store, data);
   results.replaceChildren();
   const add = (tag, text) => results.append(Object.assign(document.createElement(tag), { textContent: text }));
   add('h2', run.won ? 'set complete' : 'harmony lost');
   add('p', 'time survived: ' + mmss(run.elapsed)); add('p', 'level: ' + progress.level); add('p', 'best: ' + mmss(data.best));
   if (fresh.length) add('p', 'unlocked: ' + fresh.join(', '));
-  add('p', 'tap to play again');
+  add('p', 'vinyl +' + earned);
+  const shop = document.createElement('div'); shop.id = 'shop'; results.append(shop); renderShop();
+  add('p', 'tap outside to play again');
   results.hidden = false;
+}
+
+function renderShop() { // buttons buy ranks; opening-track owners also pick their starting voice
+  const shop = document.getElementById('shop'); shop.replaceChildren();
+  const btn = (text, on, disabled) => shop.append(Object.assign(document.createElement('button'), { type: 'button', className: 'buy', textContent: text, disabled, onclick: on }));
+  shop.append(Object.assign(document.createElement('h3'), { textContent: 'shop · ' + data.vinyl + ' vinyl' }));
+  for (const [k, it] of Object.entries(SHOP)) {
+    const rank = data.ranks[k] || 0, maxed = rank >= it.max;
+    btn(k + ' ' + rank + '/' + it.max + ' · ' + it.label + (maxed ? '' : ' · ' + cost(k, rank)), () => { if (buy(data, k)) { save(store, data); renderShop(); } }, maxed || data.vinyl < cost(k, rank));
+  }
+  if (data.ranks.opening) for (const v of data.unlocked) btn((data.start === v ? '▶ ' : '') + 'start with ' + v, () => { data.start = v; save(store, data); renderShop(); }, false);
 }
 
 function updateEnemies(dt) {
@@ -245,7 +262,7 @@ function updateEnemies(dt) {
   }
   for (let i = pickups.length - 1; i >= 0; i--) if (Math.hypot(pickups[i].x - player.x, pickups[i].y - player.y) < player.r + 12) powerup(pickups.splice(i, 1)[0].type);
   for (const o of solid) pushOut(player, o);
-  const magnet = buff.magnet > 0 ? Infinity : lastPhase === 'breakdown' ? 240 : 80;
+  const magnet = buff.magnet > 0 ? Infinity : (lastPhase === 'breakdown' ? 240 : 80) * bon.magnet;
   for (let i = gems.length - 1; i >= 0; i--) {
     const q = gems[i], dx = player.x - q.x, dy = player.y - q.y, dist = Math.hypot(dx, dy);
     if (dist < player.r + 4) { levelsPending += gainXp(progress, q.xp); gems.splice(i, 1); }
@@ -353,7 +370,9 @@ function reset() {
   for (const a of [enemies, shots, queue, gems, hostile, pickups]) a.length = 0;
   broken.clear(); keyStep = 0; setKey(0); Object.assign(buff, { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false });
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
-  run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
+  run = createRun(); progress = createProgress(data.unlocked);
+  bon = bonuses(data.ranks); rerolls = bon.rerolls; revive = bon.revive; player.speed = 240 * bon.speed;
+  if (bon.opening && data.start !== 'kick') progress.voices = new Map([[data.start, 1]]); // opening track levelsPending = 0; audio.detune(0);
   lastPhase = null; cycle = 0; picking = false; pickBars = 0; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
   player.x = player.y = 0; cam.x = cam.y = 0; cam.z = 1; cam.punch = 0;
   clock.start();
@@ -369,7 +388,7 @@ function begin() {
   requestAnimationFrame(frame);
 }
 addEventListener('pointerdown', begin); addEventListener('keydown', begin);
-const again = () => { if (gameOver && performance.now() - endedAt > 500) reset(); };
+const again = e => { if (gameOver && performance.now() - endedAt > 500 && !e.target.closest?.('button')) reset(); }; // shop buttons don't restart
 addEventListener('pointerdown', again); addEventListener('keydown', again); // ignore keys held during play
 
 const togglePause = () => {
@@ -395,6 +414,7 @@ function openPick() {
   picking = true; queue.length = 0;
   cards = rollChoices(progress, Math.random);
   cardsEl.innerHTML = cards.map((c, i) => `<button class="card" type="button" data-i="${i}">${cardHtml(c, i)}</button>`).join('');
+  if (rerolls > 0) cardsEl.insertAdjacentHTML('beforeend', `<button class="buy" type="button" data-reroll>r · reroll (${rerolls} left)</button>`);
   levelup.hidden = false;
   audio.setFilter(0.25, ac.currentTime);
   cardsEl.querySelector('button').focus();
@@ -409,5 +429,9 @@ function choose(i) {
   audio.setFilter(lastPhase === 'drop' ? 1 : 0.2, ac.currentTime); // shortcut: build snaps to 0.2, its per-step ramp corrects on the next step
   if (levelsPending > 0) openPick();
 }
-cardsEl.addEventListener('click', e => { const b = e.target.closest('.card'); if (b) choose(+b.dataset.i); });
-addEventListener('keydown', e => { if (!e.repeat && e.key >= '1' && e.key <= '3') choose(e.key - 1); });
+const reroll = () => { if (picking && !paused && rerolls > 0) { rerolls--; openPick(); } }; // crate digger
+cardsEl.addEventListener('click', e => { if (e.target.closest('[data-reroll]')) return reroll(); const b = e.target.closest('.card'); if (b) choose(+b.dataset.i); });
+addEventListener('keydown', e => {
+  if (!e.repeat && e.key >= '1' && e.key <= '3') choose(e.key - 1);
+  if (!e.repeat && e.key.toLowerCase() === 'r') reroll();
+});
