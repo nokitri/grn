@@ -59,13 +59,13 @@ export function makeEnemy(type, x, y, cycle) {
 }
 
 // build waves are the drop swarm, held at the edges until released.
-export function spawnWave(phase, cycle, w, h) {
+export function spawnWave(phase, cycle, w, h, ox = 0, oy = 0) { // w,h,ox,oy: view size and top-left in world
   const n = phase === 'breakdown' ? 3 : 12 + 6 * cycle;
   const pool = phase === 'breakdown' ? ['drifter'] : Object.keys(ENEMIES).filter(k => ENEMIES[k].unlock <= cycle);
   return Array.from({ length: n }, () => {
     const u = Math.random(), side = Math.floor(Math.random() * 4);
     const x = side < 2 ? u * w : side === 2 ? 0 : w, y = side < 2 ? (side ? h : 0) : u * h;
-    const e = makeEnemy(pool[Math.floor(Math.random() * pool.length)], x, y, cycle);
+    const e = makeEnemy(pool[Math.floor(Math.random() * pool.length)], ox + x, oy + y, cycle);
     e.held = phase === 'build';
     return e;
   });

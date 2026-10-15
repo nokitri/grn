@@ -12,6 +12,9 @@ const start = document.getElementById('start'), pauseEl = document.getElementByI
 const levelup = document.getElementById('levelup'), cardsEl = document.getElementById('cards');
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
+const cam = { x: 0, y: 0, z: 1, punch: 0 }; // world → screen: centred on cam, scaled by z
+const P = '#ff4fd8', A = '#5ff2ff'; // player/shots vs enemies (two-tone; hue filter shifts both)
+const view = () => [w / cam.z, h / cam.z, cam.x - w / 2 / cam.z, cam.y - h / 2 / cam.z]; // view size + top-left in world
 let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
 let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, picking = false, pickBars = 0, cards = [], last = 0;
@@ -22,14 +25,15 @@ const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; 
 function onPhase(phase, time) {
   if (lastPhase === 'drop') { run.drops++; if (finalDrop && !run.over) { run.won = true; endRun(); return; } }
   if (phase === 'breakdown') {
-    enemies.push(...spawnWave('breakdown', cycle, w, h));
+    enemies.push(...spawnWave('breakdown', cycle, ...view()));
     audio.setFilter(0.2, time);
   } else if (phase === 'build') {
-    enemies.push(...spawnWave('build', cycle, w, h));
+    enemies.push(...spawnWave('build', cycle, ...view()));
     audio.riser(time, clock.stepDur() * 64);
   } else {
     d.setHue(cycle);
-    if (finalDrop) enemies.push(...spawnWave('drop', cycle, w, h), ...spawnWave('drop', cycle, w, h));
+    if (finalDrop) enemies.push(...spawnWave('drop', cycle, ...view()), ...spawnWave('drop', cycle, ...view()));
+    if (!still) cam.punch = 0.15;
     for (const e of enemies) e.held = false;
     audio.setFilter(1, time);
   }
@@ -182,6 +186,8 @@ function updateEnemies(dt) {
     }
     if (e.frozen > 0) e.frozen -= dt;
     else if (!e.held) def.move(e, player, dt);
+    const far = 1.5 * Math.max(w, h) / cam.z;
+    if (!e.held && Math.hypot(e.x - player.x, e.y - player.y) > far) { e.x = 1.5 * player.x - 0.5 * e.x; e.y = 1.5 * player.y - 0.5 * e.y; } // left behind: respawn ahead, just off screen
     if (Math.hypot(e.x - player.x, e.y - player.y) < e.r + player.r) hurt();
   }
   for (let i = hostile.length - 1; i >= 0; i--) {
@@ -193,6 +199,7 @@ function updateEnemies(dt) {
   for (let i = gems.length - 1; i >= 0; i--) {
     const q = gems[i], dx = player.x - q.x, dy = player.y - q.y, dist = Math.hypot(dx, dy);
     if (dist < player.r + 4) { levelsPending += gainXp(progress, q.xp); gems.splice(i, 1); }
+    else if (dist > 3 * Math.max(w, h)) gems.splice(i, 1); // far behind: drop it so gems can't pile up
     else if (dist < magnet) { q.x += dx / dist * 400 * dt; q.y += dy / dist * 400 * dt; }
   }
 }
@@ -211,14 +218,14 @@ function drawShots() {
 }
 
 function drawWorld(t) {
-  g.shadowBlur = d.glow ? 16 : 0;
+  g.shadowBlur = d.glow ? 16 : 0; g.shadowColor = g.strokeStyle = g.fillStyle = A;
   for (const e of enemies) ENEMIES[e.type].draw(g, e, t);
   for (const b of hostile) { g.beginPath(); g.arc(b.x, b.y, 3, 0, 2 * Math.PI); g.fill(); }
+  g.shadowColor = g.strokeStyle = g.fillStyle = P;
   for (const q of gems) { g.beginPath(); g.moveTo(q.x, q.y - 4); g.lineTo(q.x + 4, q.y); g.lineTo(q.x, q.y + 4); g.lineTo(q.x - 4, q.y); g.closePath(); g.fill(); }
 }
 
-function clamp() { player.x = Math.min(w - player.r, Math.max(player.r, player.x)); player.y = Math.min(h - player.r, Math.max(player.r, player.y)); }
-function size() { const d = devicePixelRatio || 1; w = c.clientWidth; h = c.clientHeight; c.width = w * d; c.height = h * d; g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = '#050505'; g.fillRect(0, 0, w, h); clamp(); }
+function size() { const d = devicePixelRatio || 1; w = c.clientWidth; h = c.clientHeight; c.width = w * d; c.height = h * d; g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = '#050505'; g.fillRect(0, 0, w, h); }
 addEventListener('resize', size); size();
 
 function frame(t) {
@@ -233,14 +240,25 @@ function frame(t) {
     if (m.x || m.y) { const n = Math.hypot(m.x, m.y); dir.x = m.x / n; dir.y = m.y / n; }
     const k = 1 - Math.exp(-dt * 6); beamDir.x += (dir.x - beamDir.x) * k; beamDir.y += (dir.y - beamDir.y) * k;
     const bn = Math.hypot(beamDir.x, beamDir.y) || 1; beamDir.x /= bn; beamDir.y /= bn;
-    player.x += m.x * player.speed * dt; player.y += m.y * player.speed * dt; clamp();
+    player.x += m.x * player.speed * dt; player.y += m.y * player.speed * dt;
     invuln -= dt;
     updateShots(dt); updateEnemies(dt);
+    // camera: follow with lead toward heading, zoom out as the swarm grows, punch in on drops
+    const ck = 1 - Math.exp(-dt * 4), lead = 60;
+    cam.x += (player.x + dir.x * lead - cam.x) * ck; cam.y += (player.y + dir.y * lead - cam.y) * ck;
+    cam.punch = Math.max(0, cam.punch - dt * 0.5);
+    cam.z += (1 - Math.min(0.3, enemies.length / 1000) + cam.punch - cam.z) * ck;
   }
   d.fade();
   const pos = clock.position();
   d.background(t / 1000, lastPhase, Math.floor(pos.bar / 2) % 4, 1 - pos.beatFrac); // pulse 1 on each beat (kick step), decays over the beat
-  const P = '#ff4fd8', r = player.r;
+  const r = player.r;
+  g.save(); g.translate(w / 2, h / 2); g.scale(cam.z, cam.z); g.translate(-cam.x, -cam.y);
+  const [vw, vh, ox, oy] = view(), cell = 80; // world grid shows movement; spectrum floor comes later
+  g.shadowBlur = 0; g.strokeStyle = A; g.globalAlpha = 0.08 + 0.06 * (1 - pos.beatFrac); g.lineWidth = 1; g.beginPath();
+  for (let x = Math.floor(ox / cell) * cell; x < ox + vw; x += cell) { g.moveTo(x, oy); g.lineTo(x, oy + vh); }
+  for (let y = Math.floor(oy / cell) * cell; y < oy + vh; y += cell) { g.moveTo(ox, y); g.lineTo(ox + vw, y); }
+  g.stroke(); g.globalAlpha = 1;
   g.shadowColor = P; g.shadowBlur = 16; g.fillStyle = P; g.strokeStyle = P; g.lineWidth = 3;
   g.globalAlpha = invuln > 0 && !still && Math.floor(t / 80) % 2 ? 0.3 : 1; // blink while invulnerable
   g.beginPath(); g.moveTo(player.x, player.y - r); g.lineTo(player.x + r, player.y); g.lineTo(player.x, player.y + r); g.lineTo(player.x - r, player.y); g.fill();
@@ -248,7 +266,8 @@ function frame(t) {
   drawShots(); drawWorld(t / 1000); d.particles(live ? dt : 0);
   g.shadowBlur = 16; g.strokeStyle = P;
   g.beginPath(); g.arc(player.x, player.y, r + 10, -Math.PI / 2, -Math.PI / 2 + run.harmony * 2 * Math.PI); g.stroke();
-  g.shadowBlur = 0;
+  g.restore();
+  g.shadowBlur = 0; g.fillStyle = P;
   g.fillRect(0, 0, w * progress.xp / xpToNext(progress.level), 3); // xp bar
   hud.textContent = mmss(run.elapsed) + '\n' + String(clock.bpm()).padStart(3, '0') + ' bpm';
 }
@@ -258,7 +277,7 @@ function reset() {
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
   run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
   lastPhase = null; cycle = 0; picking = false; pickBars = 0; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
-  player.x = w / 2; player.y = h / 2;
+  player.x = player.y = 0; cam.x = cam.y = 0; cam.z = 1; cam.punch = 0;
   clock.start();
 }
 
