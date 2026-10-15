@@ -4,13 +4,15 @@ import { createAudio } from './audio.js';
 import { VOICES, createLoadout } from './voices.js';
 import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
+import { load, save, checkUnlocks } from './save.js';
 const c = document.getElementById('game'), g = c.getContext('2d');
 const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results');
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
-const ORB_POOL = ['kick', 'arp', 'bass']; // shortcut: fixed pool until Task 8 unlocks
+let store; try { store = localStorage; } catch {} // access itself can throw
+const data = load(store);
 let w, h, ac, clock, run, audio, loadout, paused = false, last = 0;
-let lastPhase = null, cycle = 0, invuln = 0, gameOver = false, t0 = 0;
+let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, t0 = 0;
 const enemies = [], shots = [], queue = [], orbs = [], hostile = [], parts = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
 
@@ -18,7 +20,7 @@ function onPhase(phase, time) {
   if (lastPhase === 'drop') run.drops++;
   if (phase === 'breakdown') {
     enemies.push(...spawnWave('breakdown', cycle, w, h));
-    for (let i = 0; i < 2; i++) orbs.push({ x: 40 + Math.random() * (w - 80), y: 40 + Math.random() * (h - 80), name: ORB_POOL[Math.floor(Math.random() * ORB_POOL.length)] });
+    for (let i = 0; i < 2; i++) orbs.push({ x: 40 + Math.random() * (w - 80), y: 40 + Math.random() * (h - 80), name: data.unlocked[Math.floor(Math.random() * data.unlocked.length)] });
     audio.setFilter(0.2, time);
   } else if (phase === 'build') {
     orbs.length = 0;
@@ -100,7 +102,16 @@ function hurt() {
   invuln = 1;
   const over = run.hit(0.1);
   audio.detune(1 - run.harmony);
-  if (over) { clock.stop(); gameOver = true; results.innerHTML = `<h2>harmony lost</h2><p>drops survived: ${run.drops}</p>`; results.hidden = false; }
+  if (over) { clock.stop(); gameOver = true; endedAt = performance.now(); showResults(); }
+}
+
+function showResults() {
+  const maxedVoices = [...loadout.voices.values()].filter(l => l >= 5).length;
+  const fresh = checkUnlocks(data, { drops: run.drops, maxedVoices });
+  data.unlocked.push(...fresh); data.best = Math.max(data.best, run.drops); save(store, data);
+  results.innerHTML = `<h2>&gt; harmony lost</h2><p>drops survived: ${run.drops}</p><p>best: ${data.best}</p>`
+    + (fresh.length ? `<p>unlocked: ${fresh.join(', ')}</p>` : '') + '<p>tap to play again</p>';
+  results.hidden = false;
 }
 
 function updateEnemies(dt) {
@@ -195,6 +206,7 @@ function begin() {
 }
 addEventListener('pointerdown', begin); addEventListener('keydown', begin);
 addEventListener('pointerdown', () => { if (gameOver) reset(); });
+addEventListener('keydown', () => { if (gameOver && performance.now() - endedAt > 500) reset(); }); // ignore keys held during play
 
 onPause(() => {
   if (!run || gameOver) return;
