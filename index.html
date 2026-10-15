@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grn</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+:root { --fg: #ff4fd8; --bg: #050505; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--fg); font: 20px/1.3 "VT323", ui-monospace, monospace; text-shadow: 0 0 6px var(--fg); }
+#game { position: fixed; inset: 0; width: 100%; height: 100%; }
+.panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(90vw, 420px); padding: 28px 24px; text-align: center; border: 2px solid var(--fg); border-radius: 28px; background: rgba(5,5,5,.85); box-shadow: 0 0 14px var(--fg), inset 0 0 14px rgba(255,79,216,.25); }
+.panel[hidden] { display: none; }
+.panel h1, .panel h2 { margin: 0 0 12px; font-weight: 400; font-size: 40px; letter-spacing: .08em; }
+.panel h1::before, .panel h2::before { content: "> "; opacity: .6; }
+.panel p { margin: 0; }
+#start p { animation: blink 1.2s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 10; background: linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,.35) 50%) 0 0 / 100% 3px; }
+@media (prefers-reduced-motion: reduce) { #start p { animation: none; } }
+</style>
+</head>
+<body>
+<canvas id="game" aria-hidden="true"></canvas>
+<section id="start" class="panel"><h1>grn</h1><p>tap / click to start</p></section>
+<section id="pause" class="panel" hidden><h2>paused</h2></section>
+<section id="results" class="panel" hidden><h2>results</h2></section>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
