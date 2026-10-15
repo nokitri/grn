@@ -28,7 +28,7 @@ export function createClock(ac, onStep) {
         const skip = Math.ceil((ac.currentTime - next) / dur);
         step += skip; next += skip * dur;
       }
-      while (next < ac.currentTime + 0.15) {
+      while (on && next < ac.currentTime + 0.15) {
         if (step % STEPS_PER_BAR === 0) {
           cur = pending; dur = 60 / cur / 4;
           anchors.push({ step, time: next, dur }); if (anchors.length > 4) anchors.shift();

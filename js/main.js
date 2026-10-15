@@ -2,20 +2,21 @@ import { createClock, setKey, keyScale } from './clock.js';
 import { createRun, phaseAt, bpmAt, RUN_SECONDS } from './phase.js';
 import { createAudio } from './audio.js';
 import { voiceDef } from './voices.js';
-import { createProgress, gainXp, xpToNext, rollChoices, applyChoice, stats } from './upgrades.js';
-import { ENEMIES, spawnWave, spawnReinforcements, recycleEnemy, makeEnemy } from './enemies.js';
-import { readMove, onPause } from './input.js';
+import { createProgress, gainXp, xpToNext, rollChoices, applyChoice, stats, effectsFor, EVOLUTIONS } from './upgrades.js';
+import { ENEMIES, spawnWave, spawnReinforcements, recycleEnemy, makeEnemy, advanceEnemy, makeElite, ENEMY_COLORS } from './enemies.js';
+import { readMove, onPause, clearInput, takeDash, requestDash } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
 import { createDraw } from './draw.js';
 import { SHOP, cost, buy, vinylFor, bonuses } from './shop.js';
-import { CHUNK, chunkObjects, pillarUp, pushOut, rollPowerup } from './world.js';
+import { rollPowerup } from './world.js';
+import { segmentDistance, ringTouches } from './combat.js';
 const c = document.getElementById('game'), g = c.getContext('2d'), d = createDraw(g);
 const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results'), hud = document.getElementById('hud');
 const levelup = document.getElementById('levelup'), cardsEl = document.getElementById('cards');
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
 const cam = { x: 0, y: 0, z: 1, punch: 0 }; // world → screen: centred on cam, scaled by z
-const P = '#ff4fd8', A = '#5ff2ff'; // player/shots vs enemies (two-tone; hue filter shifts both)
+const P = '#70efd2', A = '#ff887e', GRID = '#2a6471';
 const view = () => [w / cam.z, h / cam.z, cam.x - w / 2 / cam.z, cam.y - h / 2 / cam.z]; // view size + top-left in world
 let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
@@ -23,44 +24,57 @@ let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, pi
 let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, finalDrop = false;
 const enemies = [], shots = [], queue = [], gems = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
-const broken = new Map(), pickups = []; // speaker id → hp left (0 = broken)
+const pickups = [], tracks = new Map();
+let kills = 0, elites = 0, dashCooldown = 0, dashTime = 0, lastHud = 0;
+let dashDir = { x: 0, y: -1 };
+let volume = .55; try { const v = Number(store?.getItem('grn-volume')); if (store?.getItem('grn-volume') !== null && Number.isFinite(v)) volume = Math.max(0, Math.min(1, v)); } catch {}
 const buff = { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false }; // seconds left
-let objs = { pillars: [], speakers: [] }, keyStep = 0;
+let keyStep = 0;
 let bon = bonuses({}), rerolls = 0, revive = false; // meta-shop buffs for this run
 const spec = new Uint8Array(64); // live spectrum, refreshed each frame
 const specAt = a => spec[Math.floor(((a + Math.PI) / (2 * Math.PI)) * 32) % 32]; // angle → bin of the low half
-function around() { // objects in the 3×3 chunks around the player
-  const cx = Math.floor(player.x / CHUNK), cy = Math.floor(player.y / CHUNK), o = { pillars: [], speakers: [] };
-  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
-    const k = chunkObjects(cx + i, cy + j); o.pillars.push(...k.pillars);
-    if (k.speaker && broken.get(k.speaker.id) !== 0) o.speakers.push(k.speaker);
+function track(name) {
+  if (!tracks.has(name)) {
+    const channel = createAudio(ac, audio.master); channel.master.gain.value = 0.8;
+    channel.setFx({ ...Object.fromEntries(effectsFor(progress, name)), duck: stats(progress, name).duck }, ac.currentTime);
+    channel.detune(1 - run.harmony); channel.setTempo(clock.bpm(), ac.currentTime);
+    channel.setFilter(picking ? .25 : lastPhase === 'drop' ? 1 : .35, ac.currentTime);
+    tracks.set(name, channel);
   }
-  return o;
+  return tracks.get(name);
+}
+function filterAll(value, time) { audio.setFilter(value, time); for (const ch of tracks.values()) ch.setFilter(value, time); }
+function detuneAll() { for (const ch of tracks.values()) ch.detune(1 - run.harmony); }
+function notify(text) {
+  const el = document.getElementById('notice'); el.textContent = text;
+  el.classList.add('show'); clearTimeout(notify.timer); notify.timer = setTimeout(() => el.classList.remove('show'), 3200);
 }
 function powerup(type) {
+  notify({ stutter: 'STUTTER · enemies frozen for one bar', double: 'DOUBLE TIME · attacks repeat', bomb: 'DROP BOMB · clears the screen on the next beat', magnet: 'MAGNET · collect the whole floor', sweep: 'FILTER SWEEP · hits slow enemies', encore: 'ENCORE · +25% harmony' }[type]);
   const bar = 16 * clock.stepDur(), now = ac.currentTime;
   if (type === 'stutter') buff.stutter = bar;
   else if (type === 'double') buff.double = 4 * bar;
   else if (type === 'bomb') buff.bomb = true;
   else if (type === 'magnet') buff.magnet = 1;
-  else if (type === 'sweep') { buff.sweep = 4 * bar; for (let k = 0; k <= 8; k++) audio.setFilter(0.15 + 0.85 * k / 8, now + k * bar / 2); }
-  else { run.harmony = Math.min(1, run.harmony + 0.25); audio.detune(1 - run.harmony); audio.play('pad', keyScale()[0] + 12, now, { dur: 2, vel: 0.4 }); }
+  else if (type === 'sweep') { buff.sweep = 4 * bar; for (let k = 0; k <= 8; k++) filterAll(0.15 + 0.85 * k / 8, now + k * bar / 2); }
+  else { run.harmony = Math.min(1, run.harmony + 0.25); detuneAll(); audio.play('pad', keyScale()[0] + 12, now, { dur: 2, vel: 0.4 }); }
 }
 
 function onPhase(phase, time) {
   if (lastPhase === 'drop') { run.drops++; if (finalDrop && !run.over) { run.won = true; endRun(); return; } }
   if (phase === 'breakdown') {
     enemies.push(...spawnWave('breakdown', cycle, ...view()));
-    audio.setFilter(0.2, time);
+    filterAll(0.2, time);
   } else if (phase === 'build') {
     enemies.push(...spawnWave('build', cycle, ...view()));
     audio.riser(time, clock.stepDur() * 64);
   } else {
-    keyStep++; setKey(2 * keyStep); d.setHue(keyStep * 40); // every drop: up a whole step, palette rotates
+    keyStep++; setKey(2 * keyStep);
+    if (cycle > 0 && cycle % 2 === 0) { enemies.push(makeElite(cycle, ...view())); notify('ELITE INCOMING · break its signal for a supply drop'); }
     if (finalDrop) enemies.push(...spawnWave('drop', cycle, ...view()), ...spawnWave('drop', cycle, ...view()));
     if (!still) cam.punch = 0.15;
     for (const e of enemies) e.held = false;
-    audio.setFilter(1, time);
+    filterAll(1, time);
   }
 }
 
@@ -75,16 +89,11 @@ function onStep(step, time, dur) {
   if (s === 0) enemies.push(...spawnReinforcements(phase, cycle, enemies.length, ...view()));
   if (phase === 'build') {
     const b = p.barInPhase;
-    if (b === 3 && s === 0) { clock.setBpm(bpmAt(run.elapsed)); audio.setTempo(bpmAt(run.elapsed), time + 16 * dur); finalDrop = run.elapsed >= RUN_SECONDS; } // lands on the drop's first bar
+    if (b === 3 && s === 0) { clock.setBpm(bpmAt(run.elapsed)); audio.setTempo(bpmAt(run.elapsed), time + 16 * dur); for (const ch of tracks.values()) ch.setTempo(bpmAt(run.elapsed), time + 16 * dur); finalDrop = run.elapsed >= RUN_SECONDS; } // lands on the drop's first bar
     if (s % (b < 2 ? 4 : b === 2 ? 2 : 1) === 0) audio.snare(time);
-    audio.setFilter(0.2 + 0.8 * (b * 16 + s) / 64, time);
+    filterAll(0.2 + 0.8 * (b * 16 + s) / 64, time);
   }
-  if (s % 2 === 0) for (const e of enemies) {
-    const def = ENEMIES[e.type];
-    if (e.held || !def.onBeat || (s % 4 === 0) !== (e.type !== 'shard')) continue; // shard fires on off-beats
-    const shot = def.onBeat(e, player); if (shot) hostile.push(shot);
-  }
-  for (const [v, level] of playVoices(s, bar, phase, dur, time)) queue.push({ time, v, level, step: s });
+  for (const [v, level, name] of playVoices(s, bar, phase, dur, time)) queue.push({ time, v, level, name, step: s });
   if (buff.bomb && s % 4 === 0) { // drop bomb goes off on the next kick: clears the screen
     buff.bomb = false; d.kickFlash(); if (!still) cam.punch = 0.2;
     const [vw, vh, ox, oy] = view();
@@ -95,21 +104,23 @@ function onStep(step, time, dur) {
 function playVoices(s, bar, phase, dur, time) {
   const fired = [];
   if (buff.stutter > 0 && s % 2) return fired; // stutter: 1/8 gate
+  if (s % 4 === 0) for (const name of progress.voices.keys()) if (name !== 'kick') track(name).duckAt(time);
   for (const [name, level] of progress.voices) {
     const v = voiceDef(name, progress);
-    if (!v.pattern(level)[s] || (name === 'kick' && phase !== 'drop')) continue;
-    if (name === 'kick') audio.kick(time, v.patch === 'hardkick');
-    else audio.play(v.patch, v.note(s, bar, level), time, { dur: name === 'pad' ? dur * 16 : dur, vel: 0.3 * (phase === 'drop' ? 1 : 0.4) });
-    fired.push([v, level]);
+    if (!v.pattern(level)[s]) continue;
+    const channel = track(name);
+    if (name === 'kick') channel.kick(time, v.patch === 'hardkick');
+    else channel.play(v.patch, v.note(s, bar, level), time, { dur: name === 'pad' ? dur * 16 : dur, vel: 0.3 * (phase === 'drop' ? 1 : 0.4) });
+    fired.push([v, level, name]);
   }
   return fired;
 }
 
 function fire(o) {
-  const { v, level, step } = o, st = stats(progress), x = player.x, y = player.y;
+  const { v, level, step } = o, st = stats(progress, o.name), x = player.x, y = player.y;
   if (buff.double > 0 && !o.echo) { queue.push({ ...o, time: o.time + clock.stepDur(), echo: true }); queue.sort((p, q) => p.time - q.time); }
-  const dmg = bon.damage * v.damage(level) * (st.damage + (step % 4 === 0 ? st.kickBonus : 0)) * (o.mult || 1);
-  const shot = (vx, vy, life, kind, fx) => shots.push({ x, y, vx, vy, dmg, life, kind, level, area: st.area, ...fx });
+  const dmg = bon.damage * v.damage(level) * (st.damage + (lastPhase === 'drop' ? st.kickBonus : 0)) * (o.mult || 1);
+  const shot = (vx, vy, life, kind, fx) => shots.push({ x, y, vx, vy, dmg: dmg * (['ring', 'beam', 'field', 'spectrum'].includes(kind) ? 1 + .25 * st.extraShots : 1), life, kind, level, area: st.area, range: st.speed, ...fx });
   const fan = (vx, vy, life, kind, fx) => { // projectiles: velocity scaled, extra copies at ±12°, ±24°...
     for (let k = 0; k <= st.extraShots; k++) {
       const a = (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 15, c = Math.cos(a), sn = Math.sin(a);
@@ -135,22 +146,22 @@ function fire(o) {
   else shot(0, 0, 1, 'field', { wash: W === 'washField' });
 }
 
-const fieldR = s => 120 * s.area * (s.wash ? 2 : 1);
-const ringR = s => (20 + (0.25 - s.life) * 400) * s.area;
+const fieldR = s => 120 * s.area * s.range * (s.wash ? 2 : 1);
+const ringR = s => (20 + (0.25 - s.life) * 400) * s.area * s.range;
 function damage(s, e, dt) {
   const dx = e.x - s.x, dy = e.y - s.y, d = Math.hypot(dx, dy);
   if (s.kind === 'field') { if (d < fieldR(s)) { e.slow = 0.5; e.hp -= s.dmg * dt; if (s.wash) e.frozen = 1; } return; }
   if (s.kind === 'spectrum') {
-    if (!s.hit?.has(e) && d < (30 + specAt(Math.atan2(dy, dx)) * 0.5) * s.area + e.r) { e.hp -= s.dmg; (s.hit ||= new Set()).add(e); }
+    if (!s.hit?.has(e) && d < (30 + specAt(Math.atan2(dy, dx)) * 0.5) * s.area * s.range + e.r) { e.hp -= s.dmg; (s.hit ||= new Set()).add(e); }
     return;
   }
   if (s.kind === 'beam') {
-    const along = Math.max(0, Math.min(300, dx * s.vx + dy * s.vy));
+    const along = Math.max(0, Math.min(300 * s.area * s.range, dx * s.vx + dy * s.vy));
     if (Math.hypot(dx - s.vx * along, dy - s.vy * along) < e.r * (s.wide ? 3 : 1)) e.hp -= s.dmg * dt * 10; // ~dmg over its 0.1s life
     return;
   }
   if (s.life <= 0 || s.hit?.has(e)) return;
-  if (!(s.kind === 'ring' ? Math.abs(d - ringR(s)) <= 8 : d < e.r * s.area)) return;
+  if (!(s.kind === 'ring' ? ringTouches(d, ringR(s), ringR({ ...s, life: s.previousLife ?? s.life }), e.r) : segmentDistance(e.x, e.y, s.px ?? s.x, s.py ?? s.y, s.x, s.y) < e.r + 3 * s.area)) return;
   e.hp -= s.dmg;
   if (buff.sweep > 0) e.sweepT = 2;
   if (s.kind === 'bolt' || s.kind === 'spark') s.life = 0; else (s.hit ||= new Set()).add(e); // ring/pierce: once per enemy
@@ -159,10 +170,10 @@ function damage(s, e, dt) {
 function updateShots(dt) {
   while (queue.length && ac.currentTime >= queue[0].time) fire(queue.shift());
   for (let i = shots.length - 1; i >= 0; i--) {
-    const s = shots[i]; s.life -= dt;
+    const s = shots[i]; s.previousLife = s.life; s.px = s.x; s.py = s.y; s.life -= dt;
     if (s.life <= 0) {
       shots.splice(i, 1);
-      if (s.shatter) for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4, r = ringR({ life: 0, area: s.area }); shots.push({ ...s, shatter: false, kind: 'spark', life: 0.3, x: s.x + Math.cos(a) * r, y: s.y + Math.sin(a) * r, vx: Math.cos(a) * 400, vy: Math.sin(a) * 400, hit: null }); }
+      if (s.shatter) for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4, r = ringR({ life: 0, area: s.area, range: s.range }); shots.push({ ...s, shatter: false, kind: 'spark', life: 0.3, x: s.x + Math.cos(a) * r, y: s.y + Math.sin(a) * r, vx: Math.cos(a) * 400, vy: Math.sin(a) * 400, px: undefined, py: undefined, hit: null }); }
       continue;
     }
     if (s.curve || s.homing) { // acid: spiral at 180°/s; shaker: turn toward nearest enemy at up to 360°/s
@@ -185,15 +196,17 @@ function updateShots(dt) {
 }
 
 function hurt() {
-  if (invuln > 0 || gameOver) return;
+  if (invuln > 0 || dashTime > 0 || gameOver) return;
   invuln = 1;
   let over = run.hit(0.1 / bon.harmony); // headroom: more max harmony = smaller hits
   if (over && revive) { revive = false; over = false; run.over = false; run.harmony = 0.5; if (!still) cam.punch = 0.2; d.kickFlash(); } // second encore
-  audio.detune(1 - run.harmony);
+  detuneAll();
   if (over) endRun();
 }
 
 function endRun() {
+  if (gameOver) return;
+  clearInput();
   clock.stop(); picking = false; levelup.hidden = true; audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(audio.master.gain.value, ac.currentTime); audio.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.1); gameOver = true; endedAt = performance.now(); showResults();
 }
 
@@ -208,9 +221,11 @@ function showResults() {
   add('h2', run.won ? 'set complete' : 'harmony lost');
   add('p', 'time survived: ' + mmss(run.elapsed)); add('p', 'level: ' + progress.level); add('p', 'best: ' + mmss(data.best));
   if (fresh.length) add('p', 'unlocked: ' + fresh.join(', '));
+  add('p', `${kills} enemies cleared · ${elites} elites defeated`);
   add('p', 'vinyl +' + earned);
   const shop = document.createElement('div'); shop.id = 'shop'; results.append(shop); renderShop();
-  add('p', 'tap outside to play again');
+  const againButton = document.createElement('button'); againButton.className = 'primary'; againButton.textContent = 'Play another set'; againButton.onclick = reset; results.append(againButton);
+  againButton.focus();
   results.hidden = false;
 }
 
@@ -222,53 +237,43 @@ function renderShop() { // buttons buy ranks; opening-track owners also pick the
     const rank = data.ranks[k] || 0, maxed = rank >= it.max;
     btn(k + ' ' + rank + '/' + it.max + ' · ' + it.label + (maxed ? '' : ' · ' + cost(k, rank)), () => { if (buy(data, k)) { save(store, data); renderShop(); } }, maxed || data.vinyl < cost(k, rank));
   }
-  if (data.ranks.opening) for (const v of data.unlocked) btn((data.start === v ? '▶ ' : '') + 'start with ' + v, () => { data.start = v; save(store, data); renderShop(); }, false);
+  for (const v of data.unlocked) btn((data.start === v ? '▶ ' : '') + 'start with ' + v, () => { data.start = v; save(store, data); renderShop(); }, false);
 }
 
 function updateEnemies(dt) {
-  const up = objs.pillars.filter(p => pillarUp(p, clock.position().step)), solid = [...up, ...objs.speakers];
-  for (const e of enemies) {
-    e.sweepT = Math.max(0, (e.sweepT || 0) - dt);
-    e.slow = e.sweepT > 0 ? 0.5 : 1;
-  }
-  for (const sp of objs.speakers) for (const s of shots) { // speakers break under fire and drop a powerup
-    if (s.kind === 'beam' || s.kind === 'field' || s.life <= 0 || Math.hypot(s.x - sp.x, s.y - sp.y) > sp.r + 4) continue;
-    if (s.kind !== 'ring') s.life = 0;
-    const hp = (broken.get(sp.id) ?? 5) - 1; broken.set(sp.id, Math.max(0, hp));
-    if (hp <= 0) { pickups.push({ x: sp.x, y: sp.y, type: rollPowerup(Math.random) }); d.burst(sp.x, sp.y, still ? 6 : 14); break; }
-  }
+  for (const e of enemies) { e.sweepT = Math.max(0, (e.sweepT || 0) - dt); e.slow = e.sweepT > 0 ? .5 : 1; }
   for (const s of shots) for (const e of enemies) damage(s, e, dt);
-  const nextStep = ac.currentTime + (1 - (clock.position().beatFrac * 4) % 1) * clock.stepDur();
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i], def = ENEMIES[e.type];
     if (e.hp <= 0) {
       enemies.splice(i, 1);
       d.burst(e.x, e.y, still ? 4 : 8);
-      audio.blip(keyScale()[Math.floor(Math.random() * 7)] + 24, nextStep);
+      kills++;
+      if (e.elite) { elites++; pickups.push({ x: e.x, y: e.y, type: 'encore' }, { x: e.x + 28, y: e.y, type: 'magnet' }); notify('ELITE CLEARED · collect your supplies'); }
+      else if (kills % 12 === 0) pickups.push({ x: e.x, y: e.y, type: rollPowerup(Math.random) });
       gems.push({ x: e.x, y: e.y, xp: e.xp });
       def.onDeath?.(e, (type, x, y) => enemies.push({ ...makeEnemy(type, x, y, cycle), xp: 2 })); // splitter children
       continue;
     }
-    if (e.frozen > 0) e.frozen -= dt;
-    else if (!e.held && !(buff.stutter > 0)) def.move(e, player, dt);
-    for (const o of solid) pushOut(e, o);
+    if (!(buff.stutter > 0)) hostile.push(...advanceEnemy(e, player, dt));
     recycleEnemy(e, ...view());
-    if (Math.hypot(e.x - player.x, e.y - player.y) < e.r + player.r) hurt();
+    if (!e.held && Math.hypot(e.x - player.x, e.y - player.y) < e.r + player.r) hurt();
+    if (gameOver) return;
   }
   for (let i = hostile.length - 1; i >= 0; i--) {
     const b = hostile[i]; if (buff.stutter > 0) continue;
-    b.life -= dt; b.x += b.vx * dt; b.y += b.vy * dt;
-    if (Math.hypot(b.x - player.x, b.y - player.y) < player.r + 3) { hurt(); b.life = 0; }
+    const px = b.x, py = b.y; b.life -= dt; b.x += b.vx * dt; b.y += b.vy * dt;
+    if (segmentDistance(player.x, player.y, px, py, b.x, b.y) < player.r + (b.r || 3)) { hurt(); b.life = 0; }
     if (b.life <= 0) hostile.splice(i, 1);
+    if (gameOver) return;
   }
   for (let i = pickups.length - 1; i >= 0; i--) if (Math.hypot(pickups[i].x - player.x, pickups[i].y - player.y) < player.r + 12) powerup(pickups.splice(i, 1)[0].type);
-  for (const o of solid) pushOut(player, o);
-  const magnet = buff.magnet > 0 ? Infinity : (lastPhase === 'breakdown' ? 240 : 80) * bon.magnet;
+  const magnet = buff.magnet > 0 ? Infinity : (lastPhase === 'breakdown' ? 260 : 130) * bon.magnet;
   for (let i = gems.length - 1; i >= 0; i--) {
     const q = gems[i], dx = player.x - q.x, dy = player.y - q.y, dist = Math.hypot(dx, dy);
     if (dist < player.r + 4) { levelsPending += gainXp(progress, q.xp); gems.splice(i, 1); }
     else if (dist > 3 * Math.max(w, h)) gems.splice(i, 1); // far behind: drop it so gems can't pile up
-    else if (dist < magnet) { q.x += dx / dist * 400 * dt; q.y += dy / dist * 400 * dt; }
+    else if (dist < magnet) { const step = Math.min(dist, 480 * dt); q.x += dx / dist * step; q.y += dy / dist * step; }
   }
 }
 
@@ -276,10 +281,10 @@ function drawShots() {
   for (const s of shots) {
     g.beginPath();
     const echo = s.level >= 3; // voice level 3+ adds a visual layer
-    if (s.kind === 'ring') { g.arc(s.x, s.y, ringR(s), 0, 2 * Math.PI); if (echo) { const m = (20 + s.life * 400) * s.area; g.moveTo(s.x + m, s.y); g.arc(s.x, s.y, m, 0, 2 * Math.PI); } } // mirrored: contracts as the first expands
+    if (s.kind === 'ring') { g.arc(s.x, s.y, ringR(s), 0, 2 * Math.PI); if (echo) { const m = (20 + s.life * 400) * s.area * s.range; g.moveTo(s.x + m, s.y); g.arc(s.x, s.y, m, 0, 2 * Math.PI); } } // mirrored: contracts as the first expands
     else if (s.kind === 'field') { g.globalAlpha = s.life * 0.4; g.arc(s.x, s.y, fieldR(s), 0, 2 * Math.PI); }
-    else if (s.kind === 'spectrum') for (let k = 0; k < 32; k++) { const a = -Math.PI + (k + 0.5) * Math.PI / 16, L = (30 + specAt(a) * 0.5) * s.area; g.moveTo(s.x + Math.cos(a) * 14, s.y + Math.sin(a) * 14); g.lineTo(s.x + Math.cos(a) * L, s.y + Math.sin(a) * L); }
-    else if (s.kind === 'beam') { g.moveTo(s.x, s.y); g.lineTo(s.x + s.vx * 300, s.y + s.vy * 300); if (echo) { const ex = s.x - s.vy * 6, ey = s.y + s.vx * 6; g.moveTo(ex, ey); g.lineTo(ex + s.vx * 300, ey + s.vy * 300); } }
+    else if (s.kind === 'spectrum') for (let k = 0; k < 32; k++) { const a = -Math.PI + (k + 0.5) * Math.PI / 16, L = (30 + specAt(a) * 0.5) * s.area * s.range; g.moveTo(s.x + Math.cos(a) * 14, s.y + Math.sin(a) * 14); g.lineTo(s.x + Math.cos(a) * L, s.y + Math.sin(a) * L); }
+    else if (s.kind === 'beam') { g.moveTo(s.x, s.y); g.lineTo(s.x + s.vx * 300 * s.area * s.range, s.y + s.vy * 300 * s.area * s.range); if (echo) { const ex = s.x - s.vy * 6, ey = s.y + s.vx * 6; g.moveTo(ex, ey); g.lineTo(ex + s.vx * 300 * s.area * s.range, ey + s.vy * 300 * s.area * s.range); } }
     else { const k = s.kind === 'pierce' ? 0.06 : s.kind === 'bolt' && echo ? 0.06 : 0.02; g.moveTo(s.x, s.y); g.lineTo(s.x - s.vx * k, s.y - s.vy * k); }
     if (s.wide) g.lineWidth = 9;
     g.stroke(); g.globalAlpha = 1; g.lineWidth = 3;
@@ -287,50 +292,57 @@ function drawShots() {
 }
 
 const PICK_MARK = { stutter: '‖', double: '×2', bomb: '✱', magnet: 'U', sweep: '~', encore: '+' };
-function drawObjects(t, pos) {
-  g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '16px VT323, monospace'; g.lineWidth = 2;
+function drawObjects(t) {
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = 'bold 16px monospace'; g.lineWidth = 2;
   g.globalAlpha = 1; g.shadowBlur = d.glow ? 12 : 0;
-  for (const p of objs.pillars) { // up: solid glowing column; down: dashed footprint
-    const upNow = pillarUp(p, pos.step); g.strokeStyle = g.shadowColor = A;
-    g.setLineDash(upNow ? [] : [4, 6]); g.globalAlpha = upNow ? 1 : 0.35;
-    g.beginPath(); g.arc(p.x, p.y, p.r, 0, 2 * Math.PI); g.stroke();
-    if (upNow) { g.beginPath(); g.arc(p.x, p.y, p.r * 0.55, 0, 2 * Math.PI); g.stroke(); }
-  }
-  g.setLineDash([]); g.globalAlpha = 1; g.strokeStyle = g.shadowColor = g.fillStyle = P;
-  for (const s of objs.speakers) { // speaker box with a cone that pumps on the beat
-    g.strokeRect(s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
-    g.beginPath(); g.arc(s.x, s.y, s.r * (0.45 + 0.15 * (1 - pos.beatFrac)), 0, 2 * Math.PI); g.stroke();
-  }
-  for (const q of pickups) { g.save(); g.translate(q.x, q.y); g.rotate(t * 2); g.strokeRect(-9, -9, 18, 18); g.restore(); g.fillText(PICK_MARK[q.type], q.x, q.y + 1); }
-  g.lineWidth = 3;
+  g.strokeStyle = g.shadowColor = g.fillStyle = '#f4d88b';
+  for (const q of pickups) { g.save(); g.translate(q.x, q.y); g.rotate(t); g.strokeRect(-11, -11, 22, 22); g.restore(); g.fillText(PICK_MARK[q.type], q.x, q.y + 1); }
+  g.lineWidth = 2;
 }
 
 function drawWorld(t) {
   g.shadowBlur = d.glow ? 16 : 0; g.shadowColor = g.strokeStyle = g.fillStyle = A;
-  for (const e of enemies) ENEMIES[e.type].draw(g, e, t);
-  for (const b of hostile) { g.beginPath(); g.arc(b.x, b.y, 3, 0, 2 * Math.PI); g.fill(); }
+  for (const e of enemies) {
+    g.strokeStyle = g.fillStyle = g.shadowColor = ENEMY_COLORS[e.type];
+    g.lineWidth = e.elite ? 3 : 2;
+    if (e.telegraph > 0) {
+      g.save(); g.globalAlpha = .5; g.shadowBlur = 0; g.setLineDash([5, 8]);
+      g.beginPath();
+      if (e.type === 'sentinel') g.arc(e.x, e.y, e.r + 30 * (1 - e.telegraph), 0, Math.PI * 2);
+      else { g.moveTo(e.x, e.y); g.lineTo(e.x + Math.cos(e.aim) * (e.type === 'pulser' ? 200 : 290), e.y + Math.sin(e.aim) * (e.type === 'pulser' ? 200 : 290)); }
+      g.stroke(); g.restore();
+    }
+    ENEMIES[e.type].draw(g, e, t);
+    if (e.elite) { g.fillStyle = '#293947'; g.fillRect(e.x - 24, e.y - e.r - 12, 48, 4); g.fillStyle = '#ffc67d'; g.fillRect(e.x - 24, e.y - e.r - 12, 48 * Math.max(0, e.hp / e.maxHp), 4); }
+  }
+  g.lineWidth = 2; g.fillStyle = g.shadowColor = '#ffbe8c';
+  for (const b of hostile) { g.beginPath(); g.arc(b.x, b.y, b.r || 3, 0, 2 * Math.PI); g.fill(); }
   g.shadowColor = g.strokeStyle = g.fillStyle = P;
   for (const q of gems) { g.beginPath(); g.moveTo(q.x, q.y - 4); g.lineTo(q.x + 4, q.y); g.lineTo(q.x, q.y + 4); g.lineTo(q.x - 4, q.y); g.closePath(); g.fill(); }
 }
 
-function size() { const d = devicePixelRatio || 1; w = c.clientWidth; h = c.clientHeight; c.width = w * d; c.height = h * d; g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = '#050505'; g.fillRect(0, 0, w, h); }
+function size() { const d = Math.min(2, devicePixelRatio || 1); w = c.clientWidth; h = c.clientHeight; c.width = w * d; c.height = h * d; g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = '#07101c'; g.fillRect(0, 0, w, h); }
 addEventListener('resize', size); size();
 
 function frame(t) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
   if (levelsPending > 0 && !picking && !paused && !gameOver) openPick();
-  const live = !paused && !gameOver && !picking;
   if (!paused && !gameOver) clock.tick(); // music keeps going while picking
+  const live = !paused && !gameOver && !picking;
   if (live) {
     run.elapsed += dt;
-    objs = around();
     for (const k of ['stutter', 'double', 'sweep', 'magnet']) buff[k] = Math.max(0, buff[k] - dt);
     const m = readMove();
+    dashCooldown = Math.max(0, dashCooldown - dt); dashTime = Math.max(0, dashTime - dt);
+    if (takeDash() && dashCooldown === 0) { dashTime = .2; dashCooldown = 3; const n = Math.hypot(m.x, m.y); dashDir = n ? { x: m.x / n, y: m.y / n } : { ...dir }; invuln = Math.max(invuln, .25); d.burst(player.x, player.y, 10); }
+
     if (m.x || m.y) { const n = Math.hypot(m.x, m.y); dir.x = m.x / n; dir.y = m.y / n; }
     const k = 1 - Math.exp(-dt * 6); beamDir.x += (dir.x - beamDir.x) * k; beamDir.y += (dir.y - beamDir.y) * k;
     const bn = Math.hypot(beamDir.x, beamDir.y) || 1; beamDir.x /= bn; beamDir.y /= bn;
-    player.x += m.x * player.speed * dt; player.y += m.y * player.speed * dt;
+    player.vx = dashTime > 0 ? dashDir.x * 850 : m.x * player.speed;
+    player.vy = dashTime > 0 ? dashDir.y * 850 : m.y * player.speed;
+    player.x += player.vx * dt; player.y += player.vy * dt;
     invuln -= dt;
     updateShots(dt); updateEnemies(dt);
     // camera: follow with lead toward heading, zoom out as the swarm grows, punch in on drops
@@ -346,11 +358,11 @@ function frame(t) {
   const r = player.r;
   g.save(); g.translate(w / 2, h / 2); g.scale(cam.z, cam.z); g.translate(-cam.x, -cam.y);
   const [vw, vh, ox, oy] = view(), cell = 80; // world grid shows movement; spectrum floor comes later
-  g.shadowBlur = 0; g.strokeStyle = A; g.lineWidth = 1;
+  g.shadowBlur = 0; g.strokeStyle = GRID; g.lineWidth = 1;
   for (let x = Math.floor(ox / cell) * cell; x < ox + vw; x += cell) { // spectrum floor: each column lit by one bin
-    g.globalAlpha = 0.05 + spec[((Math.round(x / cell) % 32) + 32) % 32] / 255 * 0.4; g.beginPath(); g.moveTo(x, oy); g.lineTo(x, oy + vh); g.stroke();
+    g.globalAlpha = 0.05 + spec[((Math.round(x / cell) % 32) + 32) % 32] / 255 * 0.12; g.beginPath(); g.moveTo(x, oy); g.lineTo(x, oy + vh); g.stroke();
   }
-  g.globalAlpha = 0.08 + 0.06 * (1 - pos.beatFrac); g.beginPath();
+  g.globalAlpha = 0.12 + 0.03 * (1 - pos.beatFrac); g.beginPath();
   for (let y = Math.floor(oy / cell) * cell; y < oy + vh; y += cell) { g.moveTo(ox, y); g.lineTo(ox + vw, y); }
   g.stroke(); g.globalAlpha = 1;
   drawObjects(t / 1000, pos);
@@ -364,75 +376,146 @@ function frame(t) {
   g.restore();
   g.shadowBlur = 0; g.fillStyle = P;
   g.fillRect(0, 0, w * progress.xp / xpToNext(progress.level), 3); // xp bar
-  hud.textContent = mmss(run.elapsed) + '\n' + String(clock.bpm()).padStart(3, '0') + ' bpm';
+  if (t - lastHud > 100) { renderHud(); lastHud = t; }
 }
 
 function reset() {
   for (const a of [enemies, shots, queue, gems, hostile, pickups]) a.length = 0;
-  broken.clear(); keyStep = 0; setKey(0); Object.assign(buff, { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false });
-  d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
-  run = createRun(); progress = createProgress(data.unlocked);
-  bon = bonuses(data.ranks); rerolls = bon.rerolls; revive = bon.revive; player.speed = 240 * bon.speed;
-  if (bon.opening && data.start !== 'kick') progress.voices = new Map([[data.start, 1]]); // opening track levelsPending = 0; audio.detune(0);
+  keyStep = 0; setKey(0); Object.assign(buff, { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false });
+  d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(volume, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
+  for (const ch of tracks.values()) ch.dispose(); tracks.clear();
+  run = createRun();
+  progress = createProgress(data.unlocked, data.start || 'kick');
+  bon = bonuses(data.ranks);
+  if (bon.opening) progress.voices.set(data.start === 'kick' ? 'arp' : 'kick', 1);
+  rerolls = 1 + bon.rerolls; revive = bon.revive; player.speed = 240 * bon.speed;
+  levelsPending = 0; audio.detune(0); kills = elites = dashCooldown = dashTime = 0;
+  paused = false; pauseEl.hidden = true; levelup.inert = false; clearInput(); ac.resume();
+  dir.x = beamDir.x = 0; dir.y = beamDir.y = -1; player.vx = player.vy = 0;
+  document.activeElement?.blur();
+
   lastPhase = null; cycle = 0; picking = false; pickBars = 0; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
   player.x = player.y = 0; cam.x = cam.y = 0; cam.z = 1; cam.punch = 0;
-  clock.start();
+  clock.start(); renderLoadout(); renderHud();
+  notify('SURVIVE THE SET · collect diamonds to build your sound');
 }
 
 function begin() {
   if (start.hidden) return;
-  removeEventListener('pointerdown', begin); removeEventListener('keydown', begin);
-  ac = new AudioContext(); ac.resume();
-  audio = createAudio(ac);
+  ac = new AudioContext(); ac.resume(); audio = createAudio(ac);
   clock = createClock(ac, onStep); reset();
-  start.hidden = true; hud.hidden = false;
+  start.hidden = true; hud.hidden = false; document.getElementById('toolbar').hidden = false;
   requestAnimationFrame(frame);
 }
-addEventListener('pointerdown', begin); addEventListener('keydown', begin);
-const again = e => { if (gameOver && performance.now() - endedAt > 500 && !e.target.closest?.('button')) reset(); }; // shop buttons don't restart
-addEventListener('pointerdown', again); addEventListener('keydown', again); // ignore keys held during play
+document.getElementById('play').addEventListener('click', begin);
 
 const togglePause = () => {
   if (!run || gameOver) return;
+  clearInput(); document.activeElement?.blur();
   paused = !paused; pauseEl.hidden = !paused; levelup.inert = paused;
-  if (paused) ac.suspend(); else ac.resume();
+  if (paused) { ac.suspend(); document.getElementById('resume').focus(); }
+  else { ac.resume(); if (picking) cardsEl.querySelector('button')?.focus(); }
 };
 onPause(togglePause);
 document.addEventListener('visibilitychange', () => { if (document.hidden && !paused) togglePause(); });
 
 const DESCRIPTIONS = {
-  kick: 'shockwave ring', arp: 'aimed bolts', bass: 'piercing pulse', lead: 'sweeping beam', pad: 'slowing field', hats: 'spark burst', analyzer: 'spectrum spikes',
-  acid: 'spiralling bolts, always echo', hardkick: 'ring shatters into 8 shards', rolling: 'pierce on every 16th', hoover: 'wide sweeping beam', wash: 'double field, freezes 1s', shaker: 'homing sparks',
-  reverb: '+15% area', delay: 'shots echo', distortion: '+10% damage', unison: '+1 shot per note', filter: '+12% speed & range', sidechain: '+15% dmg on kick',
+  kick: 'Beat-driven shockwaves. Protects your close range.', arp: 'Rapid bolts that seek the nearest enemy.', bass: 'Heavy pulses pierce through a crowd.', lead: 'A focused beam follows your movement.', pad: 'A sustained field slows nearby enemies.', hats: 'Eight-way sparks cover your flanks.', analyzer: 'Live spectrum spikes turn sound into damage.',
+  acid: 'Spiraling bolts with a built-in echo.', hardkick: 'Shockwaves shatter into eight sparks.', rolling: 'Piercing bass fires every sixteenth note.', hoover: 'A wide beam sweeps across your path.', wash: 'Double-size field freezes enemies.', shaker: 'Sparks bend toward their targets.',
+  reverb: '+15% weapon area per rank. Adds a reverb tail.', delay: 'Repeats attacks at 40–80% damage. Adds a synced echo.', distortion: '+10% damage per rank. Saturates this voice.', unison: 'Up to 3 extra projectiles; pulses and beams gain 25% strength per layer.', filter: '+12% projectile speed and weapon reach per rank. Opens the filter.', sidechain: '+15% damage during drops per rank. Pumps this voice to the beat.',
 };
-const KIND = { voice: 'new voice', voiceUp: 'voice', fx: 'new fx', fxUp: 'fx', evolve: 'evolve', heal: 'heal' };
+const KIND = { voice: 'NEW INSTRUMENT', voiceUp: 'VOICE UPGRADE', fx: 'INSERT EFFECT', fxUp: 'EFFECT UPGRADE', evolve: 'EVOLUTION', heal: 'RECOVERY' };
 function cardHtml(c, i) {
-  if (c.kind === 'heal') return `<b>${i + 1}. heal</b><span>heal</span><span>+20% harmony</span>`;
-  const line = c.kind === 'evolve' ? `${c.name} → ${c.to}</span><span>${DESCRIPTIONS[c.to]}` : `lvl ${c.from}→${c.to}</span><span>${DESCRIPTIONS[c.name] || ''}`;
-  return `<b>${i + 1}. ${c.name}</b><span>${KIND[c.kind]}</span><span>${line}</span>`;
+  if (c.kind === 'heal') return `<span class="card-type">RECOVERY · ${i + 1}</span><b>Restore harmony</b><p>Recover 20% health and bring your instruments back into tune.</p><span class="card-foot">+20% harmony</span>`;
+  const target = c.target ? `<span class="target">${c.target.toUpperCase()} CHANNEL</span>` : '';
+  const evo = EVOLUTIONS[c.target || c.name];
+  const hint = c.kind === 'evolve' ? DESCRIPTIONS[c.to] : DESCRIPTIONS[c.name];
+  const recipe = evo && (c.name === evo.fx || c.kind === 'voiceUp') ? `<small>Evolution: ${c.target || c.name} V + ${evo.fx} → ${evo.to}</small>` : '';
+  return `<span class="card-type">${KIND[c.kind]} · ${i + 1}</span>${target}<b>${c.kind === 'evolve' ? c.to : c.name}</b><p>${hint}</p>${recipe}<span class="card-foot">${c.kind === 'evolve' ? 'Transform your voice' : `Rank ${c.from} → ${c.to}`}</span>`;
 }
 function openPick() {
-  picking = true; queue.length = 0;
-  cards = rollChoices(progress, Math.random);
-  cardsEl.innerHTML = cards.map((c, i) => `<button class="card" type="button" data-i="${i}">${cardHtml(c, i)}</button>`).join('');
-  if (rerolls > 0) cardsEl.insertAdjacentHTML('beforeend', `<button class="buy" type="button" data-reroll>r · reroll (${rerolls} left)</button>`);
-  levelup.hidden = false;
-  audio.setFilter(0.25, ac.currentTime);
+  picking = true; queue.length = 0; clearInput();
+  cards = rollChoices(progress, Math.random, run.harmony);
+  cardsEl.innerHTML = cards.map((c, i) => `<button class="card ${c.kind === 'evolve' ? 'evolution' : ''}" type="button" data-i="${i}">${cardHtml(c, i)}</button>`).join('');
+  document.getElementById('pick-level').textContent = `LEVEL ${progress.level} · SHAPE YOUR SOUND`;
+  document.getElementById('reroll').textContent = `Reroll · ${rerolls} left [R]`;
+  document.getElementById('reroll').disabled = rerolls <= 0;
+  levelup.hidden = false; filterAll(.25, ac.currentTime);
   cardsEl.querySelector('button').focus();
 }
 function choose(i) {
-  const c = cards[i];
-  if (!picking || paused || gameOver || !c) return;
-  if (c.kind === 'heal') { run.harmony = Math.min(1, run.harmony + 0.2); audio.detune(1 - run.harmony); } else applyChoice(progress, c);
-  if (c.kind === 'evolve') { audio.riser(ac.currentTime, clock.stepDur() * 16); d.kickFlash(); } // kickFlash no-ops under reduced motion
-  audio.setFx({ ...Object.fromEntries(progress.effects), duck: stats(progress).duck }, ac.currentTime);
-  levelsPending--; picking = false; levelup.hidden = true;
-  audio.setFilter(lastPhase === 'drop' ? 1 : 0.2, ac.currentTime); // shortcut: build snaps to 0.2, its per-step ramp corrects on the next step
+  const choice = cards[i];
+  if (!picking || paused || gameOver || !choice) return;
+  if (choice.kind === 'heal') { run.harmony = Math.min(1, run.harmony + .2); detuneAll(); }
+  else applyChoice(progress, choice);
+  if (choice.kind === 'evolve') { audio.riser(ac.currentTime, clock.stepDur() * 16); d.kickFlash(); }
+  for (const name of progress.voices.keys()) track(name).setFx({ ...Object.fromEntries(effectsFor(progress, name)), duck: stats(progress, name).duck }, ac.currentTime);
+  levelsPending--; picking = false; levelup.hidden = true; clearInput(); document.activeElement?.blur();
+  invuln = Math.max(invuln, .6);
+  filterAll(lastPhase === 'drop' ? 1 : .35, ac.currentTime); renderLoadout(); renderHud();
   if (levelsPending > 0) openPick();
 }
-const reroll = () => { if (picking && !paused && rerolls > 0) { rerolls--; openPick(); } }; // crate digger
-cardsEl.addEventListener('click', e => { if (e.target.closest('[data-reroll]')) return reroll(); const b = e.target.closest('.card'); if (b) choose(+b.dataset.i); });
+const reroll = () => { if (picking && !paused && rerolls > 0) { rerolls--; openPick(); } };
+cardsEl.addEventListener('click', e => { const b = e.target.closest('.card'); if (b) choose(+b.dataset.i); });
+document.getElementById('reroll').onclick = reroll;
+document.getElementById('resume').onclick = togglePause;
+document.getElementById('pause-button').onclick = togglePause;
+document.getElementById('dash-button').addEventListener('pointerdown', e => { e.preventDefault(); if (!paused && !picking && !gameOver) requestDash(); });
 addEventListener('keydown', e => {
+  if (e.target.matches?.('input, select')) return;
   if (!e.repeat && e.key >= '1' && e.key <= '3') choose(e.key - 1);
   if (!e.repeat && e.key.toLowerCase() === 'r') reroll();
+});
+function renderLoadout() {
+  document.getElementById('loadout').innerHTML = [...progress.voices].map(([name, lv]) => {
+    const fx = [...effectsFor(progress, name)].map(([n, l]) => `${n} ${l}`).join(' · ');
+    return `<div class="track"><span class="track-name">${progress.evolved.has(name) ? EVOLUTIONS[name].to : name}<b>${'▰'.repeat(lv)}${'▱'.repeat(5 - lv)}</b></span><small>${fx || 'No effects · customize at level up'}</small></div>`;
+  }).join('');
+}
+function renderHud() {
+  document.getElementById('timer').textContent = mmss(run.elapsed);
+  document.getElementById('tempo').textContent = `${clock.bpm()} BPM`;
+  document.getElementById('phase').textContent = finalDrop ? 'FINAL DROP' : (lastPhase || 'breakdown').toUpperCase();
+  document.getElementById('stage').textContent = `SET ${cycle + 1} / LEVEL ${progress.level}`;
+  document.getElementById('health-value').textContent = `${Math.ceil(run.harmony * 100)}%`;
+  document.getElementById('health-fill').style.width = `${run.harmony * 100}%`;
+  document.getElementById('health-fill').classList.toggle('low', run.harmony < .3);
+  document.getElementById('xp-fill').style.width = `${progress.xp / xpToNext(progress.level) * 100}%`;
+  document.getElementById('xp-value').textContent = `${progress.xp} / ${xpToNext(progress.level)} XP`;
+  document.getElementById('kills').textContent = `${kills} CLEARED`;
+  document.getElementById('dash-button').textContent = dashCooldown > 0 ? `DASH ${dashCooldown.toFixed(1)}s` : 'DASH';
+  document.getElementById('dash-button').disabled = dashCooldown > 0 || paused || picking || gameOver;
+  document.getElementById('buffs').textContent = Object.entries(buff).filter(([, v]) => v > 0).map(([k, v]) => `${k.toUpperCase()} ${typeof v === 'number' ? v.toFixed(0) + 's' : 'READY'}`).join(' · ');
+}
+for (const slider of document.querySelectorAll('[data-volume]')) {
+  slider.value = Math.round(volume * 100);
+  slider.addEventListener('input', () => {
+    volume = Number(slider.value) / 100;
+    for (const other of document.querySelectorAll('[data-volume]')) other.value = slider.value;
+    if (audio && !gameOver) audio.master.gain.setTargetAtTime(volume, ac.currentTime, .03);
+    try { store?.setItem('grn-volume', String(volume)); } catch {}
+  });
+}
+const starters = document.getElementById('starters');
+function renderStarters() {
+  starters.replaceChildren();
+  for (const name of data.unlocked) {
+    const button = document.createElement('button'); button.className = 'starter'; button.textContent = name;
+    button.setAttribute('aria-pressed', String(data.start === name));
+    button.onclick = () => { data.start = name; save(store, data); renderStarters(); };
+    starters.append(button);
+  }
+}
+renderStarters();
+
+// Keep keyboard navigation inside the currently open dialog.
+addEventListener('keydown', e => {
+  if (e.key !== 'Tab') return;
+  const panel = !pauseEl.hidden ? pauseEl : !levelup.hidden ? levelup : !results.hidden ? results : !start.hidden ? start : null;
+  if (!panel) return;
+  const focusable = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled)')];
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable.at(-1), active = document.activeElement;
+  if (e.shiftKey && (active === first || !panel.contains(active))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (active === last || !panel.contains(active))) { e.preventDefault(); first.focus(); }
 });

@@ -5,7 +5,7 @@ export const SHOP = {
   reach: { max: 5, base: 10, label: '+15% magnet radius' },
   gain: { max: 5, base: 20, label: '+5% damage' },
   crate: { max: 3, base: 25, label: '+1 card reroll per run' },
-  opening: { max: 1, base: 60, label: 'choose your starting voice' },
+  opening: { max: 1, base: 60, label: 'start with a second voice' },
   encore: { max: 1, base: 120, label: 'revive once at 50% harmony' },
 };
 

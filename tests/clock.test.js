@@ -52,3 +52,10 @@ test('setKey transposes chords and the scale, and resets', async () => {
   setKey(14); assert.deepEqual(chordAt(0).map(n => n % 12), [11, 2, 6]); // wraps to an octave
   setKey(0); assert.deepEqual(chordAt(0).map(n => n % 12), [9, 0, 4]);
 });
+
+test('stopping from a scheduled callback prevents further queued steps', () => {
+  const ac = { currentTime: 0 }; let calls = 0;
+  const clock = createClock(ac, () => { calls++; clock.stop(); });
+  clock.start(); clock.tick(); ac.currentTime = .5; clock.tick();
+  assert.equal(calls, 1);
+});

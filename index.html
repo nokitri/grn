@@ -2,47 +2,51 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>grn</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
-<style>
-:root { --fg: #ff4fd8; --bg: #050505; color-scheme: dark; }
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; overflow: hidden; }
-body { background: var(--bg); color: var(--fg); font: 20px/1.3 "VT323", ui-monospace, monospace; text-shadow: 0 0 6px var(--fg); }
-#game { touch-action: none; position: fixed; inset: 0; width: 100%; height: 100%; }
-.panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(90vw, 420px); padding: 28px 24px; text-align: center; border: 2px solid var(--fg); border-radius: 28px; background: rgba(5,5,5,.85); box-shadow: 0 0 14px var(--fg), inset 0 0 14px rgba(255,79,216,.25); }
-.panel[hidden] { display: none; }
-.panel h1, .panel h2 { margin: 0 0 12px; font-weight: 400; font-size: 40px; letter-spacing: .08em; }
-.panel h1::before, .panel h2::before { content: "> "; opacity: .6; }
-.panel p { margin: 0; }
-#start p { animation: blink 1.2s steps(2) infinite; }
-@keyframes blink { 50% { opacity: .35; } }
-body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 10; background: linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,.35) 50%) 0 0 / 100% 3px; }
-#hud { position: fixed; top: 12px; right: 16px; text-align: right; white-space: pre; font-size: 28px; pointer-events: none; z-index: 1; }
-#hud[hidden] { display: none; }
-#pause { z-index: 2; }
-#levelup { width: min(92vw, 640px); }
-#cards { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
-.card { flex: 1 1 160px; font: inherit; color: var(--fg); background: transparent; text-shadow: inherit; border: 2px solid var(--fg); border-radius: 20px; padding: 12px; cursor: pointer; box-shadow: 0 0 8px var(--fg); }
-.buy { display: block; width: 100%; margin: 3px 0; padding: 4px 8px; font: inherit; font-size: 17px; text-align: left; color: var(--fg); background: transparent; text-shadow: inherit; border: 1px dashed var(--fg); border-radius: 8px; cursor: pointer; }
-.buy:hover:not(:disabled), .buy:focus-visible { background: var(--fg); color: var(--bg); text-shadow: none; outline: none; }
-.buy:disabled { opacity: .4; cursor: default; }
-#results { max-height: 92vh; overflow-y: auto; }
-.card:hover, .card:focus-visible { background: var(--fg); color: var(--bg); text-shadow: none; outline: none; }
-.card b { display: block; font-size: 28px; font-weight: 400; }
-.card span { display: block; opacity: .8; }
-@media (prefers-reduced-motion: reduce) { #start p { animation: none; } }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07101c">
+<meta name="description" content="Build your sound. Survive the swarm. A generative music survival game.">
+<title>GRN — Afterhours</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<canvas id="game" aria-hidden="true"></canvas>
-<div id="hud" aria-hidden="true" hidden></div>
-<section id="start" class="panel"><h1>grn</h1><p>tap / click to start</p></section>
-<section id="pause" class="panel" hidden><h2>paused</h2></section>
-<section id="levelup" class="panel" role="dialog" aria-modal="true" aria-labelledby="levelup-title" hidden><h2 id="levelup-title">level up</h2><div id="cards"></div></section>
-<section id="results" class="panel" hidden><h2>results</h2></section>
+<canvas id="game" aria-label="Game arena. Move with WASD or arrow keys; dash with Space or Shift."></canvas>
+<div class="vignette" aria-hidden="true"></div>
+<header id="hud" hidden>
+  <div class="hud-brand"><b>GRN<span> / AFTERHOURS</span></b><small id="stage">SET 1 / LEVEL 1</small></div>
+  <div class="transport"><span id="phase">BREAKDOWN</span><strong id="timer">00:00</strong><small id="tempo">128 BPM</small></div>
+  <div class="vitals"><div class="meter-label"><span>HARMONY</span><b id="health-value">100%</b></div><div class="meter"><i id="health-fill"></i></div><div class="meter-label"><span id="xp-value">0 / 5 XP</span><span id="kills">0 CLEARED</span></div><div class="meter xp"><i id="xp-fill"></i></div></div>
+  <aside id="loadout" aria-label="Your instruments and effects"></aside>
+  <div id="buffs"></div>
+</header>
+<div id="toolbar" hidden><span class="controls-hint">WASD / ARROWS · SPACE TO DASH</span><button id="dash-button" type="button">DASH →</button><button id="pause-button" type="button" aria-label="Pause game">II</button></div>
+<div id="notice" role="status"></div>
+<section id="start" class="panel start-panel" aria-labelledby="game-title">
+  <div class="eyebrow"><span class="live-dot"></span> A GENERATIVE SURVIVAL SET</div>
+  <h1 id="game-title">GRN<span>AFTERHOURS</span></h1>
+  <p class="intro">Build your sound.<br>Survive the swarm.</p>
+  <p class="muted">Every voice is a weapon. Every effect is a choice.<br>Keep your harmony through the final drop.</p>
+  <div class="start-options"><span class="label">01 / CHOOSE YOUR OPENING VOICE</span><div id="starters" aria-label="Starting instrument"></div></div>
+  <button id="play" class="primary" type="button">START YOUR SET <span>→</span></button>
+  <div class="instructions"><div><kbd>W A S D</kbd><span>Move · or arrow keys</span></div><div><kbd>SPACE</kbd><span>Dash through danger</span></div><div><kbd>1 2 3</kbd><span>Choose your upgrades</span></div></div>
+  <p class="touch-hint">On touch: drag the arena to move. Use the dash and pause buttons.</p>
+  <label class="volume">MASTER VOLUME <input data-volume type="range" min="0" max="100" aria-label="Master volume"></label>
+  <div class="start-footer"><span>15 MINUTES / ONE FINAL DROP</span><span>AUTO-FIRE · HEADPHONES ON</span></div>
+</section>
+<section id="pause" class="panel" hidden role="dialog" aria-modal="true" aria-labelledby="pause-title">
+  <span class="eyebrow">TAKE A BREATH</span><h2 id="pause-title">Set paused.</h2>
+  <p class="muted">Your sound will be here when you’re ready.</p>
+  <label class="volume">MASTER VOLUME <input data-volume type="range" min="0" max="100" aria-label="Master volume while paused"></label>
+  <button id="resume" class="primary" type="button">BACK TO THE FLOOR <span>→</span></button>
+  <p class="muted">Escape to resume · Space to dash</p>
+</section>
+<section id="levelup" class="panel upgrade-panel" hidden role="dialog" aria-modal="true" aria-labelledby="levelup-title">
+  <span class="eyebrow" id="pick-level">SHAPE YOUR SOUND</span>
+  <h2 id="levelup-title">Make it your mix.</h2>
+  <p class="muted">Pick one upgrade. Effects apply only to the named channel.</p>
+  <div id="cards"></div>
+  <div class="pick-footer"><span>Choose with 1 / 2 / 3 · music keeps playing</span><button id="reroll" type="button">Reroll</button></div>
+</section>
+<section id="results" class="panel results-panel" hidden aria-label="Run results"></section>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

@@ -14,10 +14,10 @@ const shape = drive => {
   return c;
 };
 
-export function createAudio(ac) {
+export function createAudio(ac, destination = ac.destination) {
   const master = ac.createGain(); master.gain.value = 0.5;
   const comp = ac.createDynamicsCompressor();
-  master.connect(comp).connect(ac.destination);
+  master.connect(comp).connect(destination);
   const analyser = ac.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = 0.7; comp.connect(analyser); // 64 bins for the floor + Analyzer ring
   const ir = ac.createBuffer(2, Math.floor(ac.sampleRate * 1.8), ac.sampleRate); // shared reverb impulse
   for (let ch = 0; ch < 2; ch++) {
@@ -87,8 +87,16 @@ export function createAudio(ac) {
     wash: (hz, t, d, x, e) => [-7, 7].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 2, e, i ? 0 : x)),
   };
 
+  const duckAt = time => {
+    duck.gain.cancelScheduledValues(time);
+    duck.gain.setValueAtTime(1, time);
+    duck.gain.linearRampToValueAtTime(fx.duck, time + 0.01);
+    duck.gain.linearRampToValueAtTime(1, time + 0.2);
+  };
+  const disconnect = () => { for (const n of [bus, duck, filt, vin, kin, res, revSend, dlySend, conv, dly, fb]) n.disconnect(); };
   return {
-    master, analyser,
+    master, analyser, duckAt,
+    dispose() { disconnect(); master.disconnect(); comp.disconnect(); analyser.disconnect(); },
     play(patch, midi, time, { dur = 0.15, vel = 0.3 } = {}) {
       if (patch === 'shaker') {
         const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 5700; bp.Q.value = 1.4; // ~4-8kHz
@@ -109,10 +117,7 @@ export function createAudio(ac) {
       let out = kin, len = 0.3;
       if (hard) { out = ac.createWaveShaper(); out.curve = shape(20); out.connect(kin); len = 0.6; } // hard clip + longer tail
       o.connect(env(time, len, 0.9, 0.003, out)); o.start(time); o.stop(time + len + 0.05);
-      duck.gain.cancelScheduledValues(time);
-      duck.gain.setValueAtTime(1, time);
-      duck.gain.linearRampToValueAtTime(fx.duck, time + 0.01);
-      duck.gain.linearRampToValueAtTime(1, time + 0.2);
+      duckAt(time);
     },
     riser(start, dur) {
       const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 2;
@@ -148,6 +153,6 @@ export function createAudio(ac) {
     },
     setTempo(bpm, time) { dly.delayTime.setValueAtTime(30 / bpm, time); }, // 1/8 note
     detune(a) { wobble = a; },
-    newRun() { for (const n of [bus, vin, kin, revSend, dlySend, conv, dly, fb]) n.disconnect(); build(); }, // silences leftover scheduled sources
+    newRun() { disconnect(); wobble = 0; build(); }, // silences leftover scheduled sources
   };
 }

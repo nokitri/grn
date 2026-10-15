@@ -67,3 +67,36 @@ test('recycling preserves visible enemies and redistributes distant enemies with
   e.x = -1000; e.held = true;
   assert.equal(recycleEnemy(e, 800, 600, 100, 50), false);
 });
+
+test('chargers telegraph a fixed direction before dashing', async () => {
+  const { advanceEnemy, makeEnemy } = await import('../js/enemies.js');
+  const e = makeEnemy('pulser', 0, 0, 0), p = { x: 200, y: 0 }; e.cooldown = 0;
+  advanceEnemy(e, p, .1); assert.ok(e.telegraph > 0); assert.equal(e.x, 0);
+  const aim = e.aim; p.y = 200;
+  for (let i = 0; i < 9; i++) advanceEnemy(e, p, .1);
+  assert.equal(e.aim, aim); assert.ok(e.x > 0); assert.equal(e.y, 0);
+});
+test('ranged attacks warn before firing and have finite projectile lifetimes', async () => {
+  const { advanceEnemy, makeEnemy } = await import('../js/enemies.js');
+  for (const [type, count] of [['shard', 3], ['sentinel', 10]]) {
+    const e = makeEnemy(type, 0, 0, 4); e.cooldown = 0;
+    assert.equal(advanceEnemy(e, { x: 300, y: 0 }, .1).length, 0); assert.ok(e.telegraph > 0);
+    const bullets = [];
+    for (let i = 0; i < 12; i++) bullets.push(...advanceEnemy(e, { x: 300, y: 0 }, .1));
+    assert.equal(bullets.length, count);
+    assert.ok(bullets.every(b => Number.isFinite(b.vx) && Number.isFinite(b.vy) && b.life > 0 && b.life <= 5));
+  }
+});
+test('held and frozen enemies do not advance their attacks', async () => {
+  const { advanceEnemy, makeEnemy } = await import('../js/enemies.js');
+  const e = makeEnemy('shard', 0, 0, 3); e.telegraph = .5; e.held = true;
+  advanceEnemy(e, { x: 100, y: 0 }, 1); assert.equal(e.telegraph, .5);
+  e.held = false; e.frozen = 1;
+  advanceEnemy(e, { x: 100, y: 0 }, .5); assert.equal(e.telegraph, .5); assert.equal(e.frozen, .5);
+});
+test('elites spawn outside view and carry health and reward upgrades', async () => {
+  const { makeElite } = await import('../js/enemies.js');
+  const e = makeElite(4, 800, 600, 50, -300, () => .1);
+  assert.equal(e.elite, true); assert.equal(e.hp, e.maxHp); assert.ok(e.hp > ENEMIES.sentinel.hp(4));
+  assert.ok(e.y + e.r < -300); assert.equal(e.xp, 18);
+});

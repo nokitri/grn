@@ -12,20 +12,22 @@ const poly = (g, x, y, r, n, a) => {
 export const ENEMIES = {
   drifter: {
     hp: c => 3 * (1 + 0.25 * c), speed: 60, r: 10, unlock: 0,
-    move(e, p, dt) { toward(e, p, this.speed * e.slow, dt); },
+    move(e, p, dt) { toward(e, { x: p.x + (p.vx || 0) * .35, y: p.y + (p.vy || 0) * .35 }, this.speed * e.slow, dt); },
     draw(g, e, t) { poly(g, e.x, e.y, e.r, 3, t * 3); },
   },
   pulser: {
     hp: c => 4 * (1 + 0.25 * c), speed: 30, r: 12, unlock: 0,
-    move(e, p, dt) { e.lunge = Math.max(0, (e.lunge || 0) - dt * 4); toward(e, p, (this.speed + e.lunge * 300) * e.slow, dt); },
-    draw(g, e) { g.beginPath(); g.arc(e.x, e.y, e.r * (1 + 0.4 * (e.lunge || 0)), 0, 2 * Math.PI); g.stroke(); },
-    onBeat(e) { e.lunge = 1; },
+    move(e, p, dt) {
+      if (e.dashT > 0) { e.dashT -= dt; e.x += Math.cos(e.aim) * 430 * e.slow * dt; e.y += Math.sin(e.aim) * 430 * e.slow * dt; }
+      else if (!e.telegraph) toward(e, p, this.speed * e.slow, dt);
+    },
+    draw(g, e) { g.beginPath(); g.arc(e.x, e.y, e.r, 0, 2 * Math.PI); g.stroke(); poly(g, e.x, e.y, e.r * .5, 3, e.aim || 0); },
   },
   chain: {
     hp: c => 6 * (1 + 0.25 * c), speed: 70, r: 8, unlock: 1,
     move(e, p, dt) {
       e.t = (e.t || 0) + dt;
-      const dx = p.x - e.x, dy = p.y - e.y, n = Math.hypot(dx, dy) || 1, s = Math.sin(e.t * 4) * 1.2;
+      const ahead = 0.6, dx = p.x + (p.vx || 0) * ahead - e.x, dy = p.y + (p.vy || 0) * ahead - e.y, n = Math.hypot(dx, dy) || 1, s = Math.sin(e.t * 2 + e.flank) * 1.3;
       e.x += (dx / n - dy / n * s) * this.speed * e.slow * dt; e.y += (dy / n + dx / n * s) * this.speed * e.slow * dt;
       (e.trail ||= []).unshift({ x: e.x, y: e.y }); e.trail.length = Math.min(e.trail.length, 36);
     },
@@ -49,13 +51,16 @@ export const ENEMIES = {
       for (let i = 0; i <= 10; i++) { const r = i % 2 ? e.r * 0.45 : e.r, a = -t + i * Math.PI / 5; g.lineTo(e.x + Math.cos(a) * r, e.y + Math.sin(a) * r); }
       g.stroke();
     },
-    // called on off-beats; returns a slow hostile shot
-    onBeat(e, p) { const dx = p.x - e.x, dy = p.y - e.y, n = Math.hypot(dx, dy) || 1; return { x: e.x, y: e.y, vx: dx / n * 120, vy: dy / n * 120, life: 5 }; },
+  },
+  sentinel: {
+    hp: c => 18 * (1 + 0.25 * c), speed: 24, r: 20, unlock: 4,
+    move(e, p, dt) { if (Math.hypot(e.x - p.x, e.y - p.y) > 300) toward(e, p, this.speed * e.slow, dt); },
+    draw(g, e, t) { poly(g, e.x, e.y, e.r, 4, t * .3); poly(g, e.x, e.y, e.r * .55, 4, -t * .5); },
   },
 };
 
 export function makeEnemy(type, x, y, cycle) {
-  return { type, x, y, hp: ENEMIES[type].hp(cycle), r: ENEMIES[type].r, slow: 1, held: false, xp: type === 'shard' ? 2 : 1 };
+  return { type, x, y, hp: ENEMIES[type].hp(cycle), maxHp: ENEMIES[type].hp(cycle), r: ENEMIES[type].r, slow: 1, held: false, cooldown: 1 + Math.random(), flank: Math.random() * Math.PI * 2, xp: type === 'shard' ? 2 : 1 };
 }
 
 // Keep the whole enemy beyond the camera, including pulser expansion and trails.
@@ -96,6 +101,48 @@ export function recycleEnemy(e, w, h, ox = 0, oy = 0, rng = Math.random) {
   Object.assign(e, offscreenPosition(w, h, ox, oy, rng));
   // A chain must not draw a line back to its old position across the screen.
   if (e.trail) e.trail = [];
-  e.lunge = 0;
+  e.lunge = 0; e.telegraph = 0; e.dashT = 0; e.cooldown = 1.5;
   return true;
+}
+
+
+export const ENEMY_COLORS = { drifter: '#ff887e', pulser: '#ffb16b', chain: '#f47dab', splitter: '#de9bf4', shard: '#ffc67d', sentinel: '#ff6379' };
+
+// Attacks lock their aim before firing. Telegraphs give players time to dodge.
+export function advanceEnemy(e, player, dt) {
+  if (e.held) return [];
+  if (e.frozen > 0) { e.frozen = Math.max(0, e.frozen - dt); return []; }
+  const def = ENEMIES[e.type], bullets = [];
+  const ranged = e.type === 'shard' || e.type === 'sentinel';
+  if (ranged || e.type === 'pulser') {
+    if (e.telegraph > 0) {
+      e.telegraph = Math.max(0, e.telegraph - dt);
+      if (!e.telegraph) {
+        if (e.type === 'pulser') e.dashT = .42;
+        else {
+          const count = e.type === 'sentinel' ? 10 : 3;
+          for (let i = 0; i < count; i++) {
+            const angle = e.aim + (e.type === 'sentinel' ? i * Math.PI * 2 / count : (i - 1) * .22);
+            bullets.push({ x: e.x, y: e.y, vx: Math.cos(angle) * 155, vy: Math.sin(angle) * 155, life: 4, r: 4 });
+          }
+        }
+        e.cooldown = e.type === 'pulser' ? 2.4 : e.type === 'sentinel' ? 4 : 3;
+      }
+    } else {
+      e.cooldown -= dt;
+      if (e.cooldown <= 0 && Math.hypot(e.x - player.x, e.y - player.y) < 560) {
+        e.aim = Math.atan2(player.y + (player.vy || 0) * .3 - e.y, player.x + (player.vx || 0) * .3 - e.x);
+        e.telegraph = e.type === 'pulser' ? .7 : 1;
+      }
+    }
+  }
+  def.move(e, player, dt);
+  return bullets;
+}
+
+export function makeElite(cycle, w, h, ox = 0, oy = 0, rng = Math.random) {
+  const { x, y } = offscreenPosition(w, h, ox, oy, rng);
+  const e = makeEnemy(cycle >= 4 ? 'sentinel' : 'pulser', x, y, cycle);
+  e.elite = true; e.hp *= 6; e.maxHp = e.hp; e.r *= 1.6; e.xp = 18;
+  return e;
 }
