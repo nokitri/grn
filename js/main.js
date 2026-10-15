@@ -7,6 +7,7 @@ import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
 import { createDraw } from './draw.js';
+import { CHUNK, chunkObjects, pillarUp, pushOut, ZONES, rollPowerup } from './world.js';
 const c = document.getElementById('game'), g = c.getContext('2d'), d = createDraw(g);
 const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results'), hud = document.getElementById('hud');
 const levelup = document.getElementById('levelup'), cardsEl = document.getElementById('cards');
@@ -21,6 +22,27 @@ let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, pi
 let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, finalDrop = false;
 const enemies = [], shots = [], queue = [], gems = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
+const broken = new Map(), pickups = [], zones = []; // speaker id → hp left (0 = broken)
+const buff = { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false }; // seconds left
+let objs = { pillars: [], speakers: [] };
+const inZone = type => zones.some(z => z.type === type && Math.hypot(z.x - player.x, z.y - player.y) < z.r);
+function around() { // objects in the 3×3 chunks around the player
+  const cx = Math.floor(player.x / CHUNK), cy = Math.floor(player.y / CHUNK), o = { pillars: [], speakers: [] };
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+    const k = chunkObjects(cx + i, cy + j); o.pillars.push(...k.pillars);
+    if (k.speaker && broken.get(k.speaker.id) !== 0) o.speakers.push(k.speaker);
+  }
+  return o;
+}
+function powerup(type) {
+  const bar = 16 * clock.stepDur(), now = ac.currentTime;
+  if (type === 'stutter') buff.stutter = bar;
+  else if (type === 'double') buff.double = 4 * bar;
+  else if (type === 'bomb') buff.bomb = true;
+  else if (type === 'magnet') buff.magnet = 1;
+  else if (type === 'sweep') { buff.sweep = 4 * bar; for (let k = 0; k <= 8; k++) audio.setFilter(0.15 + 0.85 * k / 8, now + k * bar / 2); }
+  else { run.harmony = Math.min(1, run.harmony + 0.25); audio.detune(1 - run.harmony); audio.play('pad', SCALE[0] + 12, now, { dur: 2, vel: 0.4 }); }
+}
 
 function onPhase(phase, time) {
   if (lastPhase === 'drop') { run.drops++; if (finalDrop && !run.over) { run.won = true; endRun(); return; } }
@@ -58,10 +80,16 @@ function onStep(step, time, dur) {
     const shot = def.onBeat(e, player); if (shot) hostile.push(shot);
   }
   for (const [v, level] of playVoices(s, bar, phase, dur, time)) queue.push({ time, v, level, step: s });
+  if (buff.bomb && s % 4 === 0) { // drop bomb goes off on the next kick: clears the screen
+    buff.bomb = false; d.kickFlash(); if (!still) cam.punch = 0.2;
+    const [vw, vh, ox, oy] = view();
+    for (const e of enemies) if (e.x > ox && e.x < ox + vw && e.y > oy && e.y < oy + vh) e.hp = 0;
+  }
 }
 
 function playVoices(s, bar, phase, dur, time) {
   const fired = [];
+  if (buff.stutter > 0 && s % 2) return fired; // stutter: 1/8 gate
   for (const [name, level] of progress.voices) {
     const v = voiceDef(name, progress);
     if (!v.pattern(level)[s] || (name === 'kick' && phase !== 'drop')) continue;
@@ -74,6 +102,8 @@ function playVoices(s, bar, phase, dur, time) {
 
 function fire(o) {
   const { v, level, step } = o, st = stats(progress), x = player.x, y = player.y;
+  if (inZone('reverb')) st.area *= 2;
+  if ((buff.double > 0 || inZone('strobe')) && !o.echo) { queue.push({ ...o, time: o.time + clock.stepDur(), echo: true }); queue.sort((p, q) => p.time - q.time); }
   const dmg = v.damage(level) * (st.damage + (step % 4 === 0 ? st.kickBonus : 0)) * (o.mult || 1);
   const shot = (vx, vy, life, kind, fx) => shots.push({ x, y, vx, vy, dmg, life, kind, level, area: st.area, ...fx });
   const fan = (vx, vy, life, kind, fx) => { // projectiles: velocity scaled, extra copies at ±12°, ±24°...
@@ -113,6 +143,7 @@ function damage(s, e, dt) {
   if (s.life <= 0 || s.hit?.has(e)) return;
   if (!(s.kind === 'ring' ? Math.abs(d - ringR(s)) <= 8 : d < e.r * s.area)) return;
   e.hp -= s.dmg;
+  if (buff.sweep > 0) e.sweepT = 2;
   if (s.kind === 'bolt' || s.kind === 'spark') s.life = 0; else (s.hit ||= new Set()).add(e); // ring/pierce: once per enemy
 }
 
@@ -171,7 +202,17 @@ function showResults() {
 }
 
 function updateEnemies(dt) {
-  for (const e of enemies) e.slow = 1;
+  const up = objs.pillars.filter(p => pillarUp(p, clock.position().step)), solid = [...up, ...objs.speakers];
+  for (const e of enemies) {
+    e.sweepT = Math.max(0, (e.sweepT || 0) - dt);
+    e.slow = e.sweepT > 0 || zones.some(z => z.type === 'mud' && Math.hypot(z.x - e.x, z.y - e.y) < z.r) ? 0.5 : 1;
+  }
+  for (const sp of objs.speakers) for (const s of shots) { // speakers break under fire and drop a powerup
+    if (s.kind === 'beam' || s.kind === 'field' || s.life <= 0 || Math.hypot(s.x - sp.x, s.y - sp.y) > sp.r + 4) continue;
+    if (s.kind !== 'ring') s.life = 0;
+    const hp = (broken.get(sp.id) ?? 5) - 1; broken.set(sp.id, Math.max(0, hp));
+    if (hp <= 0) { pickups.push({ x: sp.x, y: sp.y, type: rollPowerup(Math.random) }); d.burst(sp.x, sp.y, still ? 6 : 14); break; }
+  }
   for (const s of shots) for (const e of enemies) damage(s, e, dt);
   const nextStep = ac.currentTime + (1 - (clock.position().beatFrac * 4) % 1) * clock.stepDur();
   for (let i = enemies.length - 1; i >= 0; i--) {
@@ -185,17 +226,21 @@ function updateEnemies(dt) {
       continue;
     }
     if (e.frozen > 0) e.frozen -= dt;
-    else if (!e.held) def.move(e, player, dt);
+    else if (!e.held && !(buff.stutter > 0)) def.move(e, player, dt);
+    for (const o of solid) pushOut(e, o);
     const far = 1.5 * Math.max(w, h) / cam.z;
     if (!e.held && Math.hypot(e.x - player.x, e.y - player.y) > far) { e.x = 1.5 * player.x - 0.5 * e.x; e.y = 1.5 * player.y - 0.5 * e.y; } // left behind: respawn ahead, just off screen
     if (Math.hypot(e.x - player.x, e.y - player.y) < e.r + player.r) hurt();
   }
   for (let i = hostile.length - 1; i >= 0; i--) {
-    const b = hostile[i]; b.life -= dt; b.x += b.vx * dt; b.y += b.vy * dt;
+    const b = hostile[i]; if (buff.stutter > 0) continue;
+    b.life -= dt; b.x += b.vx * dt; b.y += b.vy * dt;
     if (Math.hypot(b.x - player.x, b.y - player.y) < player.r + 3) { hurt(); b.life = 0; }
     if (b.life <= 0) hostile.splice(i, 1);
   }
-  const magnet = lastPhase === 'breakdown' ? 240 : 80;
+  for (let i = pickups.length - 1; i >= 0; i--) if (Math.hypot(pickups[i].x - player.x, pickups[i].y - player.y) < player.r + 12) powerup(pickups.splice(i, 1)[0].type);
+  for (const o of solid) pushOut(player, o);
+  const magnet = buff.magnet > 0 ? Infinity : lastPhase === 'breakdown' ? 240 : 80;
   for (let i = gems.length - 1; i >= 0; i--) {
     const q = gems[i], dx = player.x - q.x, dy = player.y - q.y, dist = Math.hypot(dx, dy);
     if (dist < player.r + 4) { levelsPending += gainXp(progress, q.xp); gems.splice(i, 1); }
@@ -217,6 +262,29 @@ function drawShots() {
   }
 }
 
+const ZONE_MARK = { reverb: 'R', strobe: 'S', mud: 'M' }, PICK_MARK = { stutter: '‖', double: '×2', bomb: '✱', magnet: 'U', sweep: '~', encore: '+' };
+function drawObjects(t, pos) {
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '16px VT323, monospace'; g.lineWidth = 2;
+  for (const z of zones) { // faint drifting discs that breathe on the beat
+    g.shadowBlur = 0; g.strokeStyle = g.fillStyle = P; g.globalAlpha = 0.015 + 0.015 * (1 - pos.beatFrac); // fill accumulates under the trail fade, so keep it tiny
+    g.beginPath(); g.arc(z.x, z.y, z.r, 0, 2 * Math.PI); g.fill(); g.globalAlpha = 0.35; g.stroke(); g.fillText(ZONE_MARK[z.type], z.x, z.y);
+  }
+  g.globalAlpha = 1; g.shadowBlur = d.glow ? 12 : 0;
+  for (const p of objs.pillars) { // up: solid glowing column; down: dashed footprint
+    const upNow = pillarUp(p, pos.step); g.strokeStyle = g.shadowColor = A;
+    g.setLineDash(upNow ? [] : [4, 6]); g.globalAlpha = upNow ? 1 : 0.35;
+    g.beginPath(); g.arc(p.x, p.y, p.r, 0, 2 * Math.PI); g.stroke();
+    if (upNow) { g.beginPath(); g.arc(p.x, p.y, p.r * 0.55, 0, 2 * Math.PI); g.stroke(); }
+  }
+  g.setLineDash([]); g.globalAlpha = 1; g.strokeStyle = g.shadowColor = g.fillStyle = P;
+  for (const s of objs.speakers) { // speaker box with a cone that pumps on the beat
+    g.strokeRect(s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
+    g.beginPath(); g.arc(s.x, s.y, s.r * (0.45 + 0.15 * (1 - pos.beatFrac)), 0, 2 * Math.PI); g.stroke();
+  }
+  for (const q of pickups) { g.save(); g.translate(q.x, q.y); g.rotate(t * 2); g.strokeRect(-9, -9, 18, 18); g.restore(); g.fillText(PICK_MARK[q.type], q.x, q.y + 1); }
+  g.lineWidth = 3;
+}
+
 function drawWorld(t) {
   g.shadowBlur = d.glow ? 16 : 0; g.shadowColor = g.strokeStyle = g.fillStyle = A;
   for (const e of enemies) ENEMIES[e.type].draw(g, e, t);
@@ -236,6 +304,13 @@ function frame(t) {
   if (!paused && !gameOver) clock.tick(); // music keeps going while picking
   if (live) {
     run.elapsed += dt;
+    objs = around();
+    for (const k of ['stutter', 'double', 'sweep', 'magnet']) buff[k] = Math.max(0, buff[k] - dt);
+    while (zones.length < 3) { const a = Math.random() * 2 * Math.PI, r = 300 + Math.random() * 300; zones.push({ x: player.x + Math.cos(a) * r, y: player.y + Math.sin(a) * r, r: 110, type: ZONES[zones.length], vx: Math.cos(a + 2) * 20, vy: Math.sin(a + 2) * 20 }); }
+    for (const z of zones) { // zones drift; left behind → reappear ahead of the player
+      z.x += z.vx * dt; z.y += z.vy * dt;
+      if (Math.hypot(z.x - player.x, z.y - player.y) > 1.6 * Math.max(w, h) / cam.z) { z.x = player.x + dir.x * 500; z.y = player.y + dir.y * 500; }
+    }
     const m = readMove();
     if (m.x || m.y) { const n = Math.hypot(m.x, m.y); dir.x = m.x / n; dir.y = m.y / n; }
     const k = 1 - Math.exp(-dt * 6); beamDir.x += (dir.x - beamDir.x) * k; beamDir.y += (dir.y - beamDir.y) * k;
@@ -259,6 +334,7 @@ function frame(t) {
   for (let x = Math.floor(ox / cell) * cell; x < ox + vw; x += cell) { g.moveTo(x, oy); g.lineTo(x, oy + vh); }
   for (let y = Math.floor(oy / cell) * cell; y < oy + vh; y += cell) { g.moveTo(ox, y); g.lineTo(ox + vw, y); }
   g.stroke(); g.globalAlpha = 1;
+  drawObjects(t / 1000, pos);
   g.shadowColor = P; g.shadowBlur = 16; g.fillStyle = P; g.strokeStyle = P; g.lineWidth = 3;
   g.globalAlpha = invuln > 0 && !still && Math.floor(t / 80) % 2 ? 0.3 : 1; // blink while invulnerable
   g.beginPath(); g.moveTo(player.x, player.y - r); g.lineTo(player.x + r, player.y); g.lineTo(player.x, player.y + r); g.lineTo(player.x - r, player.y); g.fill();
@@ -273,7 +349,8 @@ function frame(t) {
 }
 
 function reset() {
-  for (const a of [enemies, shots, queue, gems, hostile]) a.length = 0;
+  for (const a of [enemies, shots, queue, gems, hostile, pickups, zones]) a.length = 0;
+  broken.clear(); Object.assign(buff, { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false });
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
   run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
   lastPhase = null; cycle = 0; picking = false; pickBars = 0; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
