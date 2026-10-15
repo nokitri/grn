@@ -34,7 +34,7 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-i
 <canvas id="game" aria-hidden="true"></canvas>
 <section id="start" class="panel"><h1>grn</h1><p>tap / click to start</p></section>
 <section id="pause" class="panel" hidden><h2>paused</h2></section>
-<section id="levelup" class="panel" hidden><h2>level up</h2><div id="cards"></div></section>
+<section id="levelup" class="panel" role="dialog" aria-modal="true" aria-labelledby="levelup-title" hidden><h2 id="levelup-title">level up</h2><div id="cards"></div></section>
 <section id="results" class="panel" hidden><h2>results</h2></section>
 <script type="module" src="js/main.js"></script>
 </body>

@@ -14,7 +14,7 @@ const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
 let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
-let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, picking = false, cards = [], last = 0;
+let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, picking = false, pickBars = 0, cards = [], last = 0;
 let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, finalDrop = false;
 const enemies = [], shots = [], queue = [], gems = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
@@ -36,7 +36,10 @@ function onPhase(phase, time) {
 }
 
 function onStep(step, time, dur) {
-  const s = step % 16, bar = Math.floor(step / 16), p = phaseAt(bar), phase = p.name;
+  const s = step % 16, bar = Math.floor(step / 16);
+  if (picking && s === 0) pickBars++; // game bars freeze while picking; music bars keep going
+  const p = phaseAt(bar - pickBars), phase = p.name;
+  if (picking) { playVoices(s, bar, phase, dur, time); return; }
   cycle = p.cycle;
   if (phase !== lastPhase) { onPhase(phase, time); lastPhase = phase; }
   if (phase === 'build') {
@@ -50,13 +53,19 @@ function onStep(step, time, dur) {
     if (e.held || !def.onBeat || (s % 4 === 0) !== (e.type !== 'shard')) continue; // shard fires on off-beats
     const shot = def.onBeat(e, player); if (shot) hostile.push(shot);
   }
+  for (const [v, level] of playVoices(s, bar, phase, dur, time)) queue.push({ time, v, level });
+}
+
+function playVoices(s, bar, phase, dur, time) {
+  const fired = [];
   for (const [name, level] of progress.voices) {
     const v = VOICES[name];
     if (!v.pattern(level)[s] || (name === 'kick' && phase !== 'drop')) continue;
     if (name === 'kick') audio.kick(time);
     else audio.play(v.patch, v.note(s, bar, level), time, { dur: name === 'pad' ? dur * 16 : dur, vel: 0.3 * (phase === 'drop' ? 1 : 0.4) });
-    if (!picking) queue.push({ time, v, level });
+    fired.push([v, level]);
   }
+  return fired;
 }
 
 function fire({ v, level }) {
@@ -111,7 +120,7 @@ function hurt() {
 }
 
 function endRun() {
-  clock.stop(); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(audio.master.gain.value, ac.currentTime); audio.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.1); gameOver = true; endedAt = performance.now(); showResults();
+  clock.stop(); picking = false; levelup.hidden = true; audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(audio.master.gain.value, ac.currentTime); audio.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.1); gameOver = true; endedAt = performance.now(); showResults();
 }
 
 function showResults() {
@@ -211,7 +220,7 @@ function reset() {
   for (const a of [enemies, shots, queue, gems, hostile]) a.length = 0;
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun();
   run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
-  lastPhase = null; cycle = 0; picking = false; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
+  lastPhase = null; cycle = 0; picking = false; pickBars = 0; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
   player.x = w / 2; player.y = h / 2;
   clock.start();
 }
@@ -231,7 +240,7 @@ addEventListener('pointerdown', again); addEventListener('keydown', again); // i
 
 const togglePause = () => {
   if (!run || gameOver) return;
-  paused = !paused; pauseEl.hidden = !paused;
+  paused = !paused; pauseEl.hidden = !paused; levelup.inert = paused;
   if (paused) ac.suspend(); else ac.resume();
 };
 onPause(togglePause);
@@ -239,7 +248,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && !pa
 
 const DESCRIPTIONS = {
   kick: 'shockwave ring', arp: 'aimed bolts', bass: 'piercing pulse', lead: 'sweeping beam', pad: 'slowing field', hats: 'spark burst',
-  reverb: '+15% area', delay: 'shots echo', distortion: '+damage', unison: 'extra shots', filter: 'sharper hits', sidechain: 'pushes enemies on kick',
+  reverb: '+15% area', delay: 'shots echo', distortion: '+10% damage', unison: '+1 shot per note', filter: '+12% speed & range', sidechain: '+15% dmg on kick',
 };
 const KIND = { voice: 'new voice', voiceUp: 'voice', fx: 'new fx', fxUp: 'fx', evolve: 'evolve', heal: 'heal' };
 function cardHtml(c, i) {
@@ -253,10 +262,11 @@ function openPick() {
   cardsEl.innerHTML = cards.map((c, i) => `<button class="card" type="button" data-i="${i}">${cardHtml(c, i)}</button>`).join('');
   levelup.hidden = false;
   audio.setFilter(0.25, ac.currentTime);
+  cardsEl.querySelector('button').focus();
 }
 function choose(i) {
   const c = cards[i];
-  if (!picking || paused || !c) return;
+  if (!picking || paused || gameOver || !c) return;
   if (c.kind === 'heal') { run.harmony = Math.min(1, run.harmony + 0.2); audio.detune(1 - run.harmony); } else applyChoice(progress, c);
   levelsPending--; picking = false; levelup.hidden = true;
   audio.setFilter(lastPhase === 'drop' ? 1 : 0.2, ac.currentTime); // shortcut: build snaps to 0.2, its per-step ramp corrects on the next step
