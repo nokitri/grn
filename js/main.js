@@ -1,5 +1,4 @@
-import { createClock, chordAt } from './clock.js';
-import { createAudio } from './audio.js';
+import { createClock } from './clock.js';
 import { createRun } from './phase.js';
 import { readMove, onPause } from './input.js';
 const c = document.getElementById('game'), g = c.getContext('2d');
@@ -33,8 +32,7 @@ function begin() {
   if (start.hidden) return;
   removeEventListener('pointerdown', begin); removeEventListener('keydown', begin);
   ac = new AudioContext(); ac.resume();
-  const au = createAudio(ac);
-  clock = createClock(ac, (n, t) => { if (n % 4 === 0) au.kick(t); if (n % 2 === 0) au.play('arp', chordAt(Math.floor(n / 16))[(n / 2) % 3] + 12, t); }); // DEV HOOK clock.start(); run = createRun();
+  clock = createClock(ac, () => {}); clock.start(); run = createRun();
   player.x = w / 2; player.y = h / 2;
   start.hidden = true;
   requestAnimationFrame(frame);
