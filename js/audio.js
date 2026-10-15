@@ -70,23 +70,43 @@ export function createAudio(ac) {
     bass: (hz, t, d, x, e) => osc('sawtooth', hz, 0, t, t + d + 0.05, e, x),
     lead: (hz, t, d, x, e) => [-12, 0, 12].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 0.05, e, i ? 0 : x)),
     pad: (hz, t, d, x, e) => [-7, 7].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 0.05, e, i ? 0 : x)),
+    acid: (hz, t, d, x, e) => {
+      const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 12;
+      f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(3000, t + d * 0.3); f.frequency.exponentialRampToValueAtTime(300, t + d);
+      f.connect(e); osc('sawtooth', hz, 0, t, t + d + 0.05, f, x);
+    },
+    rolling: (hz, t, d, x, e) => osc('sawtooth', hz, 0, t, t + d * 0.6, e, x),
+    hoover: (hz, t, d, x, e) => [-15, 0, 15].forEach((c, i) => {
+      const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = hz; o.detune.setValueAtTime(c, t);
+      o.detune.linearRampToValueAtTime(c - 200, t + 0.08); // -2 semitone dip
+      o.connect(e); o.start(t); o.stop(t + d + 0.05);
+      if (!i && x) osc('sawtooth', hz, c, t, t + d + 0.05, e, x - 1); // unison layers (no dip)
+    }),
+    wash: (hz, t, d, x, e) => [-7, 7].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 2, e, i ? 0 : x)),
   };
 
   return {
     master,
     play(patch, midi, time, { dur = 0.15, vel = 0.3 } = {}) {
+      if (patch === 'shaker') {
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 5700; bp.Q.value = 1.4; // ~4-8kHz
+        bp.connect(env(time, 0.05, vel)); noiseSrc(time, 0.06, bp); return;
+      }
       if (patch === 'hats') {
         const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
         hp.connect(env(time, 0.03, vel)); noiseSrc(time, 0.04, hp); return;
       }
-      const extra = Math.floor(fx.unison / 2), pad = patch === 'pad', e = env(time, dur, vel / Math.sqrt(1 + extra), pad ? 0.4 : 0.004);
+      const extra = Math.floor(fx.unison / 2), pad = patch === 'pad' || patch === 'wash';
+      const e = env(time, dur + (patch === 'wash' ? 2 : 0), vel / Math.sqrt(1 + extra), pad ? 0.4 : 0.004); // wash: 2s release
       patches[patch](midiToHz(midi), time, dur, extra, e);
     },
-    kick(time) {
+    kick(time, hard = false) {
       const o = ac.createOscillator(); o.type = 'sine';
       o.frequency.setValueAtTime(150, time);
       o.frequency.exponentialRampToValueAtTime(45, time + 0.12);
-      o.connect(env(time, 0.3, 0.9, 0.003, kin)); o.start(time); o.stop(time + 0.35);
+      let out = kin, len = 0.3;
+      if (hard) { out = ac.createWaveShaper(); out.curve = shape(20); out.connect(kin); len = 0.6; } // hard clip + longer tail
+      o.connect(env(time, len, 0.9, 0.003, out)); o.start(time); o.stop(time + len + 0.05);
       duck.gain.cancelScheduledValues(time);
       duck.gain.setValueAtTime(1, time);
       duck.gain.linearRampToValueAtTime(fx.duck, time + 0.01);

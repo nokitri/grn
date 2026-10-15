@@ -22,3 +22,20 @@ test('density rules and starter loadout', () => {
   assert.equal(VOICES.bass.pattern(5).filter(Boolean).length, 8);
   assert.equal(VOICES.arp.damage(3), VOICES.arp.damage(1) * 1.7);
 });
+import { EVOLVED, voiceDef } from '../js/voices.js';
+import { EVOLUTIONS } from '../js/upgrades.js';
+test('evolved voices stay in A minor', () => {
+  const key = new Set([9,11,0,2,4,5,7]);
+  assert.equal(Object.keys(EVOLVED).length, 6);
+  for (const v of Object.values(EVOLVED)) for (let l = 1; l <= 5; l++)
+    for (let bar = 0; bar < 8; bar++) for (let s = 0; s < 16; s++)
+      assert.ok(key.has(v.note(s, bar, l) % 12));
+  assert.equal(EVOLVED.rolling.pattern(5).filter(Boolean).length, 16);
+  assert.deepEqual(EVOLVED.acid.pattern(5), VOICES.arp.pattern(5));
+});
+test('voiceDef returns evolved def only when evolved', () => {
+  for (const [name, e] of Object.entries(EVOLUTIONS)) {
+    assert.equal(voiceDef(name, { evolved: new Set() }), VOICES[name]);
+    assert.equal(voiceDef(name, { evolved: new Set([name]) }), EVOLVED[e.to]);
+  }
+});

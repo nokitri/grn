@@ -1,4 +1,5 @@
 import { chordAt } from './clock.js';
+import { EVOLUTIONS } from './upgrades.js';
 
 // n hits spread evenly over 16 steps
 const spread = n => { const p = Array(16).fill(false); for (let i = 0; i < n; i++) p[Math.floor(i * 16 / n)] = true; return p; };
@@ -18,3 +19,15 @@ export const VOICES = {
   hats: voice('hats', 'spark', 1, l => l < 3 ? steps([2, 6, 10, 14]) : spread([8, 12, 16][l - 3]), root),
 };
 
+
+// evolutions keep the base voice's level-5 pattern (rolling: every 16th) and notes; weapon kind switches the variant in main.js
+const evolve = (base, patch, weapon, pattern = () => VOICES[base].pattern(5)) => ({ ...VOICES[base], patch, weapon, pattern });
+export const EVOLVED = {
+  acid: evolve('arp', 'acid', 'acidBolt'),
+  hardkick: evolve('kick', 'hardkick', 'shatterRing'),
+  rolling: evolve('bass', 'rolling', 'pierce', () => Array(16).fill(true)),
+  hoover: evolve('lead', 'hoover', 'hooverBeam'),
+  wash: evolve('pad', 'wash', 'washField'),
+  shaker: evolve('hats', 'shaker', 'homingSpark'),
+};
+export const voiceDef = (name, progress) => progress.evolved.has(name) ? EVOLVED[EVOLUTIONS[name].to] : VOICES[name];
