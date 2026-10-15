@@ -8,8 +8,8 @@ export function createDraw(g) {
     glow: true, // false once frames run slow: enemies/particles drop shadowBlur, player keeps it
     fade() {
       if (saved) { g.restore(); saved = false; } // undo last frame's camera jolt
-      const now = performance.now();
-      if (lastFade) { times.push(now - lastFade); if (times.length > 60) times.shift(); }
+      const now = performance.now(); // gaps over 250ms (hidden/throttled tab) are skipped
+      if (lastFade && now - lastFade <= 250) { times.push(now - lastFade); if (times.length > 60) times.shift(); }
       lastFade = now;
       if (d.glow && times.length === 60 && times.reduce((a, b) => a + b) / 60 > 20) d.glow = false;
       g.shadowBlur = 0; // else the fade rect itself glows
