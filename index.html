@@ -6,7 +6,114 @@
 <meta name="theme-color" content="#050505">
 <meta name="description" content="Build your sound. Survive the swarm. A generative music survival game.">
 <title>grn</title>
-<link rel="stylesheet" href="style.css">
+<style>
+@font-face { font-family: "VT323"; src: url("assets/fonts/VT323-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+
+:root { --fg: #ff4fd8; --bg: #050505; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--fg); font: 20px/1.3 "VT323", ui-monospace, monospace; text-shadow: 0 0 6px var(--fg); }
+#game { touch-action: none; position: fixed; inset: 0; width: 100%; height: 100%; }
+.panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(90vw, 420px); padding: 28px 24px; text-align: center; border: 2px solid var(--fg); border-radius: 28px; background: rgba(5,5,5,.85); box-shadow: 0 0 14px var(--fg), inset 0 0 14px rgba(255,79,216,.25); }
+.panel[hidden] { display: none; }
+.panel h1, .panel h2 { margin: 0 0 12px; font-weight: 400; font-size: 40px; letter-spacing: .08em; }
+.panel h1::before, .panel h2::before { content: "> "; opacity: .6; }
+.panel p { margin: 0; }
+#start p { animation: blink 1.2s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 10; background: linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,.35) 50%) 0 0 / 100% 3px; }
+#hud { position: fixed; top: 12px; right: 16px; text-align: right; white-space: pre; font-size: 28px; pointer-events: none; z-index: 1; }
+#hud[hidden] { display: none; }
+#pause { z-index: 2; }
+#levelup { width: min(92vw, 640px); }
+#cards { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.card { flex: 1 1 160px; font: inherit; color: var(--fg); background: transparent; text-shadow: inherit; border: 2px solid var(--fg); border-radius: 20px; padding: 12px; cursor: pointer; box-shadow: 0 0 8px var(--fg); }
+.buy { display: block; width: 100%; margin: 3px 0; padding: 4px 8px; font: inherit; font-size: 17px; text-align: left; color: var(--fg); background: transparent; text-shadow: inherit; border: 1px dashed var(--fg); border-radius: 8px; cursor: pointer; }
+.buy:hover:not(:disabled), .buy:focus-visible { background: var(--fg); color: var(--bg); text-shadow: none; outline: none; }
+.buy:disabled { opacity: .4; cursor: default; }
+#results { max-height: 92vh; overflow-y: auto; }
+.card:hover, .card:focus-visible { background: var(--fg); color: var(--bg); text-shadow: none; outline: none; }
+.card b { display: block; font-size: 28px; font-weight: 400; }
+.card span { display: block; opacity: .8; }
+@media (prefers-reduced-motion: reduce) { #start p { animation: none; } }
+
+[hidden] { display: none !important; }
+button, input { font: inherit; }
+button { cursor: pointer; color: var(--fg); background: transparent; text-shadow: inherit; border: 1px solid var(--fg); border-radius: 8px; padding: 4px 8px; }
+button:hover:not(:disabled), button:focus-visible { color: var(--bg); background: var(--fg); text-shadow: none; outline: 1px solid var(--fg); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: default; }
+.panel { z-index: 5; max-height: 92dvh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--fg) var(--bg); }
+#start #play { display: block; width: 100%; padding: 0; border: 0; margin: 0 0 16px; animation: blink 1.2s steps(2) infinite; }
+#start #play:hover, #start #play:focus-visible { animation: none; }
+#start p { animation: none; font-size: 17px; margin: 8px 0 0; }
+#starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
+.starter[aria-pressed=true] { background: var(--fg); color: var(--bg); text-shadow: none; }
+#hud { inset: 0; font-size: 20px; text-align: left; white-space: normal; }
+.hud-brand { position: absolute; top: 12px; left: 16px; }
+.hud-brand small { font: inherit; }
+.transport { position: absolute; top: 12px; right: 16px; display: flex; flex-direction: column; text-align: right; font-size: 28px; }
+.transport strong, .transport small { font: inherit; }
+#phase { font-size: 20px; }
+.vitals { position: absolute; right: 16px; top: 112px; width: 190px; }
+.meter-label { display: flex; justify-content: space-between; font-size: 16px; gap: 8px; }
+.meter-label b { font-weight: 400; }
+.meter { border: 1px solid var(--fg); height: 6px; margin: 3px 0 8px; }
+.meter i { display: block; width: 100%; height: 100%; background: var(--fg); }
+.meter.xp { border-color: #5ff2ff; height: 4px; }
+.xp i { background: #5ff2ff; width: 0; }
+#loadout { position: absolute; left: 16px; bottom: 16px; width: min(300px, 40vw); }
+.track { margin-top: 7px; background: rgba(5,5,5,.65); }
+.track-name { display: flex; justify-content: space-between; font-size: 20px; }
+.track-name b { font-size: 13px; font-weight: 400; }
+.track small { display: block; color: #5ff2ff; text-shadow: 0 0 4px #5ff2ff; font-size: 16px; overflow-wrap: anywhere; }
+#buffs { position: absolute; top: 42px; left: 16px; max-width: 40vw; font-size: 17px; color: #5ff2ff; }
+#notice { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); width: 44vw; opacity: 0; pointer-events: none; text-align: center; color: #5ff2ff; font-size: 17px; z-index: 3; }
+#notice.show { opacity: 1; }
+#toolbar { position: fixed; right: 16px; bottom: 16px; z-index: 3; display: flex; align-items: center; gap: 8px; }
+#toolbar button { min-height: 44px; background: rgba(5,5,5,.85); }
+#toolbar button:hover:not(:disabled) { background: var(--fg); }
+.controls-hint { font-size: 16px; }
+#dash-button { min-width: 100px; }
+#pick-level { font-size: 17px; opacity: .8; }
+#levelup > p { font-size: 17px; margin: 0 0 14px; }
+.card { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; }
+.card b { margin: 3px 0; text-transform: lowercase; }
+.card-type { font-size: 16px; text-transform: lowercase; }
+.card p { font-size: 18px; line-height: 1.1; }
+.card small, .target { display: block; color: #5ff2ff; font-size: 16px; text-shadow: 0 0 4px #5ff2ff; text-transform: lowercase; }
+.card-foot { margin-top: auto; padding-top: 8px; font-size: 17px; text-transform: lowercase; }
+.card:hover small, .card:hover .target, .card:focus-visible small, .card:focus-visible .target { color: var(--bg); text-shadow: none; }
+.pick-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; font-size: 16px; }
+.pick-footer span { text-align: left; }
+.pick-footer button { flex-shrink: 0; }
+.volume { display: flex; align-items: center; justify-content: space-between; margin: 18px 0; }
+.volume input { accent-color: var(--fg); max-width: 55%; }
+.primary { margin: 14px 0; }
+#results .primary { width: 100%; border: 2px solid var(--fg); border-radius: 20px; padding: 10px; }
+#pause { z-index: 8; }
+@media(max-width:700px) {
+  .controls-hint { display: none; }
+  #loadout { bottom: 75px; width: 46vw; }
+  .track-name { font-size: 18px; }
+  .track-name b { font-size: 11px; }
+  .track small { font-size: 14px; }
+  .vitals { width: 160px; }
+  #notice { top: 76px; left: 16px; transform: none; width: 42vw; text-align: left; font-size: 16px; }
+}
+@media(max-width:480px) {
+  .panel { padding: 20px 14px; max-height: 94dvh; }
+  #cards { flex-direction: column; gap: 8px; }
+  .card { flex: none; width: 100%; padding: 8px 10px; gap: 3px; }
+  .card b { font-size: 25px; }
+  .card p { font-size: 17px; }
+  .card small, .card-type, .target { font-size: 15px; }
+  .card-foot { padding-top: 4px; font-size: 16px; }
+  .pick-footer { font-size: 14px; }
+  .pick-footer button { font-size: 16px; }
+}
+@media(prefers-reduced-motion:reduce) { #start #play { animation: none; } }
+
+</style>
 </head>
 <body>
 <canvas id="game" aria-label="Game arena. Move with WASD or arrow keys; dash with Space or Shift."></canvas>
@@ -19,15 +126,12 @@
 </header>
 <div id="toolbar" hidden><span class="controls-hint">WASD / ARROWS · SPACE TO DASH</span><button id="dash-button" type="button">DASH →</button><button id="pause-button" type="button" aria-label="Pause game">II</button></div>
 <div id="notice" role="status"></div>
-<section id="start" class="panel start-panel" aria-labelledby="game-title">
+<section id="start" class="panel" aria-labelledby="game-title">
   <h1 id="game-title">grn</h1>
-  <p class="intro">survive the set. build your sound.</p>
-  <div class="start-options"><span class="label">starting voice</span><div id="starters" aria-label="Starting instrument"></div></div>
-  <button id="play" class="primary" type="button">tap / click to start</button>
-  <div class="instructions"><div><kbd>W A S D</kbd><span>move / arrows</span></div><div><kbd>SPACE</kbd><span>dash</span></div><div><kbd>1 2 3</kbd><span>upgrades</span></div></div>
-  <p class="touch-hint">touch: drag to move · dash + pause buttons below</p>
-  <label class="volume">volume <input data-volume type="range" min="0" max="100" aria-label="Master volume"></label>
-  <div class="start-footer"><span>survive 15:00 + the final drop</span><span>weapons fire automatically</span></div>
+  <button id="play" type="button">tap / click to start</button>
+  <p>wasd / arrows to move · space to dash</p>
+  <p>drag to move on touch · esc to pause</p>
+  <p>starting voice</p><div id="starters" aria-label="Starting instrument"></div>
 </section>
 <section id="pause" class="panel" hidden role="dialog" aria-modal="true" aria-labelledby="pause-title">
   <h2 id="pause-title">paused</h2>
@@ -44,6 +148,7 @@
   <div class="pick-footer"><span>1 / 2 / 3 to pick · music keeps playing</span><button id="reroll" type="button">Reroll</button></div>
 </section>
 <section id="results" class="panel results-panel" hidden aria-label="Run results"></section>
-<script type="module" src="js/main.js"></script>
+<script type="importmap">{"imports":{"./js/audio.js":"./js/audio.js?v=original-gui-3","./js/clock.js":"./js/clock.js?v=original-gui-3","./js/combat.js":"./js/combat.js?v=original-gui-3","./js/draw.js":"./js/draw.js?v=original-gui-3","./js/enemies.js":"./js/enemies.js?v=original-gui-3","./js/input.js":"./js/input.js?v=original-gui-3","./js/main.js":"./js/main.js?v=original-gui-3","./js/phase.js":"./js/phase.js?v=original-gui-3","./js/save.js":"./js/save.js?v=original-gui-3","./js/shop.js":"./js/shop.js?v=original-gui-3","./js/upgrades.js":"./js/upgrades.js?v=original-gui-3","./js/voices.js":"./js/voices.js?v=original-gui-3","./js/world.js":"./js/world.js?v=original-gui-3"}}</script>
+<script type="module" src="js/main.js?v=original-gui-3"></script>
 </body>
 </html>
