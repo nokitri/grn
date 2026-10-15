@@ -1,10 +1,13 @@
 export const STEPS_PER_BAR = 16;
 export const SCALE = [45, 47, 48, 50, 52, 53, 55];
 const ROOTS = [0, 5, 2, 6]; // scale degrees: i, VI, III, VII
+let key = 0; // semitone offset from A minor, kept within ±6 so the register doesn't drift
+export function setKey(semi) { const k = ((semi % 12) + 12) % 12; key = k > 6 ? k - 12 : k; }
+export const keyScale = () => SCALE.map(n => n + key);
 export const midiToHz = m => 440 * 2 ** ((m - 69) / 12);
 export function chordAt(bar) {
   const d = ROOTS[Math.floor(bar / 2) % 4];
-  return [0, 2, 4].map(i => SCALE[(d + i) % 7] + 12 * Math.floor((d + i) / 7));
+  return [0, 2, 4].map(i => SCALE[(d + i) % 7] + key + 12 * Math.floor((d + i) / 7));
 }
 export function createClock(ac, onStep) {
   let step = 0, next = 0, on = false, cur = 128, pending = 128, dur = 60 / 128 / 4, anchors = [];

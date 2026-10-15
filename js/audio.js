@@ -18,6 +18,7 @@ export function createAudio(ac) {
   const master = ac.createGain(); master.gain.value = 0.5;
   const comp = ac.createDynamicsCompressor();
   master.connect(comp).connect(ac.destination);
+  const analyser = ac.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = 0.7; comp.connect(analyser); // 64 bins for the floor + Analyzer ring
   const ir = ac.createBuffer(2, Math.floor(ac.sampleRate * 1.8), ac.sampleRate); // shared reverb impulse
   for (let ch = 0; ch < 2; ch++) {
     const d = ir.getChannelData(ch);
@@ -67,6 +68,7 @@ export function createAudio(ac) {
 
   const patches = {
     arp: (hz, t, d, x, e) => osc('square', hz, 0, t, t + d + 0.05, e, x),
+    scope: (hz, t, d, x, e) => osc('sine', hz * 2, 0, t, t + d + 0.05, e, x),
     bass: (hz, t, d, x, e) => osc('sawtooth', hz, 0, t, t + d + 0.05, e, x),
     lead: (hz, t, d, x, e) => [-12, 0, 12].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 0.05, e, i ? 0 : x)),
     pad: (hz, t, d, x, e) => [-7, 7].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 0.05, e, i ? 0 : x)),
@@ -86,7 +88,7 @@ export function createAudio(ac) {
   };
 
   return {
-    master,
+    master, analyser,
     play(patch, midi, time, { dur = 0.15, vel = 0.3 } = {}) {
       if (patch === 'shaker') {
         const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 5700; bp.Q.value = 1.4; // ~4-8kHz

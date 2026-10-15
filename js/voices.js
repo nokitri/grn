@@ -17,6 +17,7 @@ export const VOICES = {
   lead: voice('lead', 'beam', 2, l => spread([2, 3, 4, 6, 8][l - 1]), (s, bar) => chordAt(bar)[(s >> 2) % 3] + 12),
   pad: voice('pad', 'field', 0.5, l => spread(l), (s, bar) => chordAt(bar)[s % 3]),
   hats: voice('hats', 'spark', 1, l => l < 3 ? steps([2, 6, 10, 14]) : spread([8, 12, 16][l - 3]), root),
+  analyzer: voice('scope', 'spectrum', 1.5, l => spread([4, 6, 8, 12, 16][l - 1]), root), // spikes = live spectrum
 };
 
 

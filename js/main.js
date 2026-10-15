@@ -1,4 +1,4 @@
-import { createClock, SCALE } from './clock.js';
+import { createClock, setKey, keyScale } from './clock.js';
 import { createRun, phaseAt, bpmAt, RUN_SECONDS } from './phase.js';
 import { createAudio } from './audio.js';
 import { voiceDef } from './voices.js';
@@ -24,7 +24,9 @@ const enemies = [], shots = [], queue = [], gems = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
 const broken = new Map(), pickups = [], zones = []; // speaker id → hp left (0 = broken)
 const buff = { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false }; // seconds left
-let objs = { pillars: [], speakers: [] };
+let objs = { pillars: [], speakers: [] }, keyStep = 0;
+const spec = new Uint8Array(64); // live spectrum, refreshed each frame
+const specAt = a => spec[Math.floor(((a + Math.PI) / (2 * Math.PI)) * 32) % 32]; // angle → bin of the low half
 const inZone = type => zones.some(z => z.type === type && Math.hypot(z.x - player.x, z.y - player.y) < z.r);
 function around() { // objects in the 3×3 chunks around the player
   const cx = Math.floor(player.x / CHUNK), cy = Math.floor(player.y / CHUNK), o = { pillars: [], speakers: [] };
@@ -41,7 +43,7 @@ function powerup(type) {
   else if (type === 'bomb') buff.bomb = true;
   else if (type === 'magnet') buff.magnet = 1;
   else if (type === 'sweep') { buff.sweep = 4 * bar; for (let k = 0; k <= 8; k++) audio.setFilter(0.15 + 0.85 * k / 8, now + k * bar / 2); }
-  else { run.harmony = Math.min(1, run.harmony + 0.25); audio.detune(1 - run.harmony); audio.play('pad', SCALE[0] + 12, now, { dur: 2, vel: 0.4 }); }
+  else { run.harmony = Math.min(1, run.harmony + 0.25); audio.detune(1 - run.harmony); audio.play('pad', keyScale()[0] + 12, now, { dur: 2, vel: 0.4 }); }
 }
 
 function onPhase(phase, time) {
@@ -53,7 +55,7 @@ function onPhase(phase, time) {
     enemies.push(...spawnWave('build', cycle, ...view()));
     audio.riser(time, clock.stepDur() * 64);
   } else {
-    d.setHue(cycle);
+    keyStep++; setKey(2 * keyStep); d.setHue(keyStep * 40); // every drop: up a whole step, palette rotates
     if (finalDrop) enemies.push(...spawnWave('drop', cycle, ...view()), ...spawnWave('drop', cycle, ...view()));
     if (!still) cam.punch = 0.15;
     for (const e of enemies) e.held = false;
@@ -127,6 +129,7 @@ function fire(o) {
   else if (W === 'beam' || W === 'hooverBeam') shot(beamDir.x, beamDir.y, 0.1, 'beam', { wide: W === 'hooverBeam' }); // vx,vy = unit heading
   else if (W === 'spark' || W === 'homingSpark') for (let i = 0; i < 8; i++) fan(Math.cos(i * Math.PI / 4) * 400, Math.sin(i * Math.PI / 4) * 400, 0.3, 'spark', { homing: W === 'homingSpark' });
   else if (W === 'ring' || W === 'shatterRing') shot(0, 0, 0.25, 'ring', { shatter: W === 'shatterRing' }); // centred on player
+  else if (W === 'spectrum') shot(0, 0, 0.15, 'spectrum'); // spikes = live spectrum, centred on player
   else shot(0, 0, 1, 'field', { wash: W === 'washField' });
 }
 
@@ -135,6 +138,10 @@ const ringR = s => (20 + (0.25 - s.life) * 400) * s.area;
 function damage(s, e, dt) {
   const dx = e.x - s.x, dy = e.y - s.y, d = Math.hypot(dx, dy);
   if (s.kind === 'field') { if (d < fieldR(s)) { e.slow = 0.5; e.hp -= s.dmg * dt; if (s.wash) e.frozen = 1; } return; }
+  if (s.kind === 'spectrum') {
+    if (!s.hit?.has(e) && d < (30 + specAt(Math.atan2(dy, dx)) * 0.5) * s.area + e.r) { e.hp -= s.dmg; (s.hit ||= new Set()).add(e); }
+    return;
+  }
   if (s.kind === 'beam') {
     const along = Math.max(0, Math.min(300, dx * s.vx + dy * s.vy));
     if (Math.hypot(dx - s.vx * along, dy - s.vy * along) < e.r * (s.wide ? 3 : 1)) e.hp -= s.dmg * dt * 10; // ~dmg over its 0.1s life
@@ -166,7 +173,7 @@ function updateShots(dt) {
       }
       const c = Math.cos(turn), sn = Math.sin(turn), vx = s.vx; s.vx = vx * c - s.vy * sn; s.vy = vx * sn + s.vy * c;
     }
-    if (s.kind === 'beam' || s.kind === 'ring' || s.kind === 'field') { s.x = player.x; s.y = player.y; }
+    if (s.kind === 'beam' || s.kind === 'ring' || s.kind === 'field' || s.kind === 'spectrum') { s.x = player.x; s.y = player.y; }
     else { s.x += s.vx * dt; s.y += s.vy * dt; }
     if (s.kind === 'beam') {
       const a = s.wide ? Math.PI / 6 * Math.sin(run.elapsed * 4) : 0, c = Math.cos(a), sn = Math.sin(a); // hoover sweeps ±30°
@@ -220,7 +227,7 @@ function updateEnemies(dt) {
     if (e.hp <= 0) {
       enemies.splice(i, 1);
       d.burst(e.x, e.y, still ? 4 : 8);
-      audio.blip(SCALE[Math.floor(Math.random() * SCALE.length)] + 24, nextStep);
+      audio.blip(keyScale()[Math.floor(Math.random() * 7)] + 24, nextStep);
       gems.push({ x: e.x, y: e.y, xp: e.xp });
       def.onDeath?.(e, (type, x, y) => enemies.push({ ...makeEnemy(type, x, y, cycle), xp: 2 })); // splitter children
       continue;
@@ -255,6 +262,7 @@ function drawShots() {
     const echo = s.level >= 3; // voice level 3+ adds a visual layer
     if (s.kind === 'ring') { g.arc(s.x, s.y, ringR(s), 0, 2 * Math.PI); if (echo) { const m = (20 + s.life * 400) * s.area; g.moveTo(s.x + m, s.y); g.arc(s.x, s.y, m, 0, 2 * Math.PI); } } // mirrored: contracts as the first expands
     else if (s.kind === 'field') { g.globalAlpha = s.life * 0.4; g.arc(s.x, s.y, fieldR(s), 0, 2 * Math.PI); }
+    else if (s.kind === 'spectrum') for (let k = 0; k < 32; k++) { const a = -Math.PI + (k + 0.5) * Math.PI / 16, L = (30 + specAt(a) * 0.5) * s.area; g.moveTo(s.x + Math.cos(a) * 14, s.y + Math.sin(a) * 14); g.lineTo(s.x + Math.cos(a) * L, s.y + Math.sin(a) * L); }
     else if (s.kind === 'beam') { g.moveTo(s.x, s.y); g.lineTo(s.x + s.vx * 300, s.y + s.vy * 300); if (echo) { const ex = s.x - s.vy * 6, ey = s.y + s.vx * 6; g.moveTo(ex, ey); g.lineTo(ex + s.vx * 300, ey + s.vy * 300); } }
     else { const k = s.kind === 'pierce' ? 0.06 : s.kind === 'bolt' && echo ? 0.06 : 0.02; g.moveTo(s.x, s.y); g.lineTo(s.x - s.vx * k, s.y - s.vy * k); }
     if (s.wide) g.lineWidth = 9;
@@ -325,13 +333,17 @@ function frame(t) {
     cam.z += (1 - Math.min(0.3, enemies.length / 1000) + cam.punch - cam.z) * ck;
   }
   d.fade();
+  audio.analyser.getByteFrequencyData(spec);
   const pos = clock.position();
   d.background(t / 1000, lastPhase, Math.floor(pos.bar / 2) % 4, 1 - pos.beatFrac); // pulse 1 on each beat (kick step), decays over the beat
   const r = player.r;
   g.save(); g.translate(w / 2, h / 2); g.scale(cam.z, cam.z); g.translate(-cam.x, -cam.y);
   const [vw, vh, ox, oy] = view(), cell = 80; // world grid shows movement; spectrum floor comes later
-  g.shadowBlur = 0; g.strokeStyle = A; g.globalAlpha = 0.08 + 0.06 * (1 - pos.beatFrac); g.lineWidth = 1; g.beginPath();
-  for (let x = Math.floor(ox / cell) * cell; x < ox + vw; x += cell) { g.moveTo(x, oy); g.lineTo(x, oy + vh); }
+  g.shadowBlur = 0; g.strokeStyle = A; g.lineWidth = 1;
+  for (let x = Math.floor(ox / cell) * cell; x < ox + vw; x += cell) { // spectrum floor: each column lit by one bin
+    g.globalAlpha = 0.05 + spec[((Math.round(x / cell) % 32) + 32) % 32] / 255 * 0.4; g.beginPath(); g.moveTo(x, oy); g.lineTo(x, oy + vh); g.stroke();
+  }
+  g.globalAlpha = 0.08 + 0.06 * (1 - pos.beatFrac); g.beginPath();
   for (let y = Math.floor(oy / cell) * cell; y < oy + vh; y += cell) { g.moveTo(ox, y); g.lineTo(ox + vw, y); }
   g.stroke(); g.globalAlpha = 1;
   drawObjects(t / 1000, pos);
@@ -350,7 +362,7 @@ function frame(t) {
 
 function reset() {
   for (const a of [enemies, shots, queue, gems, hostile, pickups, zones]) a.length = 0;
-  broken.clear(); Object.assign(buff, { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false });
+  broken.clear(); keyStep = 0; setKey(0); Object.assign(buff, { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false });
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
   run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
   lastPhase = null; cycle = 0; picking = false; pickBars = 0; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
@@ -380,7 +392,7 @@ onPause(togglePause);
 document.addEventListener('visibilitychange', () => { if (document.hidden && !paused) togglePause(); });
 
 const DESCRIPTIONS = {
-  kick: 'shockwave ring', arp: 'aimed bolts', bass: 'piercing pulse', lead: 'sweeping beam', pad: 'slowing field', hats: 'spark burst',
+  kick: 'shockwave ring', arp: 'aimed bolts', bass: 'piercing pulse', lead: 'sweeping beam', pad: 'slowing field', hats: 'spark burst', analyzer: 'spectrum spikes',
   acid: 'spiralling bolts, always echo', hardkick: 'ring shatters into 8 shards', rolling: 'pierce on every 16th', hoover: 'wide sweeping beam', wash: 'double field, freezes 1s', shaker: 'homing sparks',
   reverb: '+15% area', delay: 'shots echo', distortion: '+10% damage', unison: '+1 shot per note', filter: '+12% speed & range', sidechain: '+15% dmg on kick',
 };

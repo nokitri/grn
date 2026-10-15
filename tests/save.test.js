@@ -15,13 +15,13 @@ test('round trip', () => {
   save({ setItem() { throw new Error(); } }, D); save(undefined, D);
 });
 test('v2 unlocks', () => {
-  assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 610, won: false, evolved: 0 }), ['bass','lead']);
-  assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 900, won: true, evolved: 1 }), ['bass','lead','pad','hats']);
+  assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 610, won: false, evolved: 0 }), ['bass','lead','analyzer']);
+  assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 900, won: true, evolved: 1 }), ['bass','lead','pad','hats','analyzer']);
 });
 test('unlock boundaries', () => {
   const u = s => checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: s, won: false, evolved: 0 });
   assert.deepEqual(u(299), []); assert.deepEqual(u(300), ['bass']);
-  assert.deepEqual(u(599), ['bass']); assert.deepEqual(u(600), ['bass','lead']);
+  assert.deepEqual(u(599), ['bass','analyzer']); assert.deepEqual(u(600), ['bass','lead','analyzer']);
 });
 test('v1 save still loads', () => {
   const s = { getItem: () => JSON.stringify({ unlocked: ['kick','arp','bass'], best: 4 }) };
@@ -31,4 +31,10 @@ test('load sanitizes unlocked and best', () => {
   const s = v => ({ getItem: () => JSON.stringify(v) });
   assert.deepEqual(load(s({ unlocked: ['arp', 'bass', 'bass', '<b>x</b>'], best: 2 })), { unlocked: ['kick', 'arp', 'bass'], best: 2 });
   assert.deepEqual(load(s({ unlocked: [], best: -1 })), D);
+});
+test('analyzer unlocks at 7:30', async () => {
+  const { checkUnlocks } = await import('../js/save.js');
+  const base = { unlocked: ['kick', 'arp', 'bass'] };
+  assert.ok(!checkUnlocks(base, { seconds: 449, won: false, evolved: 0 }).includes('analyzer'));
+  assert.ok(checkUnlocks(base, { seconds: 450, won: false, evolved: 0 }).includes('analyzer'));
 });

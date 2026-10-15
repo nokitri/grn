@@ -42,7 +42,7 @@ export function createDraw(g) {
     },
     clear() { parts.length = 0; },
     kickFlash() { if (still()) return; flash = 1; jolt = 3; },
-    setHue(cycle) { g.canvas.style.filter = `hue-rotate(${Math.min(60, cycle * 20)}deg)`; },
+    setHue(deg) { g.canvas.style.filter = `hue-rotate(${deg % 360}deg)`; },
   };
   return d;
 }

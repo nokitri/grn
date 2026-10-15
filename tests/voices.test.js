@@ -39,3 +39,8 @@ test('voiceDef returns evolved def only when evolved', () => {
     assert.equal(voiceDef(name, { evolved: new Set([name]) }), EVOLVED[e.to]);
   }
 });
+test('analyzer voice fires on quarters at level 1 and densifies', () => {
+  assert.equal(VOICES.analyzer.weapon, 'spectrum');
+  assert.deepEqual(VOICES.analyzer.pattern(1).flatMap((b, i) => b ? [i] : []), [0, 4, 8, 12]);
+  assert.equal(VOICES.analyzer.pattern(5).filter(Boolean).length, 16);
+});

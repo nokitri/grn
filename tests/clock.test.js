@@ -44,3 +44,11 @@ test('position reports bar after a stall', () => {
   assert.equal(c.position().bar, Math.floor(c.position().step / 16));
   assert.ok(c.position().step > 200);
 });
+test('setKey transposes chords and the scale, and resets', async () => {
+  const { setKey, keyScale } = await import('../js/clock.js');
+  setKey(2);
+  assert.deepEqual(chordAt(0).map(n => n % 12), [11, 2, 6]); // B minor
+  assert.equal(keyScale()[0] % 12, 11);
+  setKey(14); assert.deepEqual(chordAt(0).map(n => n % 12), [11, 2, 6]); // wraps to an octave
+  setKey(0); assert.deepEqual(chordAt(0).map(n => n % 12), [9, 0, 4]);
+});
