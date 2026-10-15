@@ -1,5 +1,5 @@
 import test from 'node:test'; import assert from 'node:assert/strict';
-import { CHUNK, chunkObjects, pillarUp, pushOut, POWERUPS, rollPowerup, ZONES } from '../js/world.js';
+import { CHUNK, chunkObjects, pillarUp, pushOut, POWERUPS, rollPowerup } from '../js/world.js';
 
 test('chunks are deterministic and stay inside their chunk', () => {
   assert.deepEqual(chunkObjects(3, -2), chunkObjects(3, -2));
@@ -26,5 +26,4 @@ test('powerups', () => {
   assert.deepEqual(POWERUPS, ['stutter', 'double', 'bomb', 'magnet', 'sweep', 'encore']);
   assert.equal(rollPowerup(() => 0), 'stutter');
   assert.equal(rollPowerup(() => 0.999), 'encore');
-  assert.deepEqual(ZONES, ['reverb', 'strobe', 'mud']);
 });

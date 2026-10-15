@@ -15,7 +15,7 @@ export function createDraw(g) {
       g.shadowBlur = 0; // else the fade rect itself glows
       g.fillStyle = still() ? 'rgba(5,5,5,.35)' : 'rgba(5,5,5,.18)'; g.fillRect(0, 0, g.canvas.clientWidth, g.canvas.clientHeight);
     },
-    background(t, phase, chordIndex, beatPulse) {
+    background(t, phase, chordIndex, beatPulse, cx, cy) { // cx,cy: screen centre of the polygons (the player)
       const w = g.canvas.clientWidth, h = g.canvas.clientHeight, build = phase === 'build';
       g.save(); saved = true;
       if (jolt > 0) { g.translate((Math.random() * 2 - 1) * 4, (Math.random() * 2 - 1) * 4); jolt--; }
@@ -24,7 +24,7 @@ export function createDraw(g) {
       for (let i = 1; i <= 5; i++) {
         const r = base * i * (1 + 0.06 * beatPulse);
         g.beginPath();
-        for (let k = 0; k <= sides; k++) { const a = rot + k * 2 * Math.PI / sides; g.lineTo(w / 2 + Math.cos(a) * r, h / 2 + Math.sin(a) * r); }
+        for (let k = 0; k <= sides; k++) { const a = rot + k * 2 * Math.PI / sides; g.lineTo((cx ?? w / 2) + Math.cos(a) * r, (cy ?? h / 2) + Math.sin(a) * r); }
         g.stroke();
       }
       g.globalAlpha = 1;

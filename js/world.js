@@ -1,7 +1,6 @@
 // The endless field: objects come from a hash of the chunk coords, so nothing is stored but broken speakers.
 export const CHUNK = 640;
 export const POWERUPS = ['stutter', 'double', 'bomb', 'magnet', 'sweep', 'encore'];
-export const ZONES = ['reverb', 'strobe', 'mud'];
 
 function rng(cx, cy) { // mulberry32 seeded from the chunk coords
   let a = (Math.imul(cx, 73856093) ^ Math.imul(cy, 19349663)) >>> 0;

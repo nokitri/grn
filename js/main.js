@@ -7,7 +7,7 @@ import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
 import { createDraw } from './draw.js';
-import { CHUNK, chunkObjects, pillarUp, pushOut, ZONES, rollPowerup } from './world.js';
+import { CHUNK, chunkObjects, pillarUp, pushOut, rollPowerup } from './world.js';
 const c = document.getElementById('game'), g = c.getContext('2d'), d = createDraw(g);
 const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results'), hud = document.getElementById('hud');
 const levelup = document.getElementById('levelup'), cardsEl = document.getElementById('cards');
@@ -22,12 +22,11 @@ let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, pi
 let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, finalDrop = false;
 const enemies = [], shots = [], queue = [], gems = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
-const broken = new Map(), pickups = [], zones = []; // speaker id → hp left (0 = broken)
+const broken = new Map(), pickups = []; // speaker id → hp left (0 = broken)
 const buff = { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false }; // seconds left
 let objs = { pillars: [], speakers: [] }, keyStep = 0;
 const spec = new Uint8Array(64); // live spectrum, refreshed each frame
 const specAt = a => spec[Math.floor(((a + Math.PI) / (2 * Math.PI)) * 32) % 32]; // angle → bin of the low half
-const inZone = type => zones.some(z => z.type === type && Math.hypot(z.x - player.x, z.y - player.y) < z.r);
 function around() { // objects in the 3×3 chunks around the player
   const cx = Math.floor(player.x / CHUNK), cy = Math.floor(player.y / CHUNK), o = { pillars: [], speakers: [] };
   for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
@@ -104,8 +103,7 @@ function playVoices(s, bar, phase, dur, time) {
 
 function fire(o) {
   const { v, level, step } = o, st = stats(progress), x = player.x, y = player.y;
-  if (inZone('reverb')) st.area *= 2;
-  if ((buff.double > 0 || inZone('strobe')) && !o.echo) { queue.push({ ...o, time: o.time + clock.stepDur(), echo: true }); queue.sort((p, q) => p.time - q.time); }
+  if (buff.double > 0 && !o.echo) { queue.push({ ...o, time: o.time + clock.stepDur(), echo: true }); queue.sort((p, q) => p.time - q.time); }
   const dmg = v.damage(level) * (st.damage + (step % 4 === 0 ? st.kickBonus : 0)) * (o.mult || 1);
   const shot = (vx, vy, life, kind, fx) => shots.push({ x, y, vx, vy, dmg, life, kind, level, area: st.area, ...fx });
   const fan = (vx, vy, life, kind, fx) => { // projectiles: velocity scaled, extra copies at ±12°, ±24°...
@@ -212,7 +210,7 @@ function updateEnemies(dt) {
   const up = objs.pillars.filter(p => pillarUp(p, clock.position().step)), solid = [...up, ...objs.speakers];
   for (const e of enemies) {
     e.sweepT = Math.max(0, (e.sweepT || 0) - dt);
-    e.slow = e.sweepT > 0 || zones.some(z => z.type === 'mud' && Math.hypot(z.x - e.x, z.y - e.y) < z.r) ? 0.5 : 1;
+    e.slow = e.sweepT > 0 ? 0.5 : 1;
   }
   for (const sp of objs.speakers) for (const s of shots) { // speakers break under fire and drop a powerup
     if (s.kind === 'beam' || s.kind === 'field' || s.life <= 0 || Math.hypot(s.x - sp.x, s.y - sp.y) > sp.r + 4) continue;
@@ -270,13 +268,9 @@ function drawShots() {
   }
 }
 
-const ZONE_MARK = { reverb: 'R', strobe: 'S', mud: 'M' }, PICK_MARK = { stutter: '‖', double: '×2', bomb: '✱', magnet: 'U', sweep: '~', encore: '+' };
+const PICK_MARK = { stutter: '‖', double: '×2', bomb: '✱', magnet: 'U', sweep: '~', encore: '+' };
 function drawObjects(t, pos) {
   g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '16px VT323, monospace'; g.lineWidth = 2;
-  for (const z of zones) { // faint drifting discs that breathe on the beat
-    g.shadowBlur = 0; g.strokeStyle = g.fillStyle = P; g.globalAlpha = 0.015 + 0.015 * (1 - pos.beatFrac); // fill accumulates under the trail fade, so keep it tiny
-    g.beginPath(); g.arc(z.x, z.y, z.r, 0, 2 * Math.PI); g.fill(); g.globalAlpha = 0.35; g.stroke(); g.fillText(ZONE_MARK[z.type], z.x, z.y);
-  }
   g.globalAlpha = 1; g.shadowBlur = d.glow ? 12 : 0;
   for (const p of objs.pillars) { // up: solid glowing column; down: dashed footprint
     const upNow = pillarUp(p, pos.step); g.strokeStyle = g.shadowColor = A;
@@ -314,11 +308,6 @@ function frame(t) {
     run.elapsed += dt;
     objs = around();
     for (const k of ['stutter', 'double', 'sweep', 'magnet']) buff[k] = Math.max(0, buff[k] - dt);
-    while (zones.length < 3) { const a = Math.random() * 2 * Math.PI, r = 300 + Math.random() * 300; zones.push({ x: player.x + Math.cos(a) * r, y: player.y + Math.sin(a) * r, r: 110, type: ZONES[zones.length], vx: Math.cos(a + 2) * 20, vy: Math.sin(a + 2) * 20 }); }
-    for (const z of zones) { // zones drift; left behind → reappear ahead of the player
-      z.x += z.vx * dt; z.y += z.vy * dt;
-      if (Math.hypot(z.x - player.x, z.y - player.y) > 1.6 * Math.max(w, h) / cam.z) { z.x = player.x + dir.x * 500; z.y = player.y + dir.y * 500; }
-    }
     const m = readMove();
     if (m.x || m.y) { const n = Math.hypot(m.x, m.y); dir.x = m.x / n; dir.y = m.y / n; }
     const k = 1 - Math.exp(-dt * 6); beamDir.x += (dir.x - beamDir.x) * k; beamDir.y += (dir.y - beamDir.y) * k;
@@ -335,7 +324,7 @@ function frame(t) {
   d.fade();
   audio.analyser.getByteFrequencyData(spec);
   const pos = clock.position();
-  d.background(t / 1000, lastPhase, Math.floor(pos.bar / 2) % 4, 1 - pos.beatFrac); // pulse 1 on each beat (kick step), decays over the beat
+  d.background(t / 1000, lastPhase, Math.floor(pos.bar / 2) % 4, 1 - pos.beatFrac, (player.x - cam.x) * cam.z + w / 2, (player.y - cam.y) * cam.z + h / 2); // pulse 1 on each beat (kick step), decays over the beat
   const r = player.r;
   g.save(); g.translate(w / 2, h / 2); g.scale(cam.z, cam.z); g.translate(-cam.x, -cam.y);
   const [vw, vh, ox, oy] = view(), cell = 80; // world grid shows movement; spectrum floor comes later
@@ -361,7 +350,7 @@ function frame(t) {
 }
 
 function reset() {
-  for (const a of [enemies, shots, queue, gems, hostile, pickups, zones]) a.length = 0;
+  for (const a of [enemies, shots, queue, gems, hostile, pickups]) a.length = 0;
   broken.clear(); keyStep = 0; setKey(0); Object.assign(buff, { stutter: 0, double: 0, sweep: 0, magnet: 0, bomb: false });
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
   run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
