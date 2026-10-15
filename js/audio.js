@@ -4,7 +4,7 @@ import { midiToHz } from './clock.js';
 export function fxParams(l = {}) {
   const v = n => l[n] || 0;
   return {
-    reverb: .1 * v('reverb'), delay: .08 * v('delay'), drive: 1 + 1.75 * v('distortion'), distort: v('distortion') > 0,
+    reverb: .1 * v('reverb'), delay: v('delay') && .1 + .075 * (v('delay') - 1), drive: 1 + 1.75 * Math.max(0, v('distortion') - 1), distort: v('distortion') > 0,
     q: 1 + 2 * v('filter'), cutoff: v('filter') ? 6000 + 2000 * v('filter') : 20000, unison: v('unison'), duck: l.duck ?? .3,
   };
 }
@@ -23,23 +23,23 @@ export function createAudio(ac) {
     const d = ir.getChannelData(ch);
     for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-4 * i / d.length);
   }
-  let bus, duck, filt, vin, kin, res, revSend, dlySend, dly, fx = fxParams();
+  let bus, duck, filt, vin, kin, res, revSend, dlySend, dly, fb, conv, fx = fxParams();
   const build = () => {
     bus = ac.createGain(); duck = ac.createGain(); filt = ac.createBiquadFilter();
     filt.type = 'lowpass'; filt.frequency.value = 18000;
     vin = ac.createWaveShaper(); kin = ac.createWaveShaper(); res = ac.createBiquadFilter(); res.type = 'lowpass';
     revSend = ac.createGain(); dlySend = ac.createGain(); dly = ac.createDelay(1); dly.delayTime.value = 30 / 128;
-    const conv = ac.createConvolver(); conv.buffer = ir;
-    const fb = ac.createGain(); fb.gain.value = 0.3;
+    conv = ac.createConvolver(); conv.buffer = ir;
+    fb = ac.createGain(); fb.gain.value = 0.3;
     vin.connect(res).connect(duck).connect(filt).connect(bus).connect(master);
-    kin.connect(bus);
+    kin.connect(filt); // past duck, still under the pick muffle
     for (const n of [vin, kin]) { n.connect(revSend); n.connect(dlySend); }
-    revSend.connect(conv).connect(bus);
-    dlySend.connect(dly).connect(fb).connect(dly); dly.connect(bus);
+    revSend.connect(conv).connect(filt);
+    dlySend.connect(dly).connect(fb).connect(dly); dly.connect(filt);
     revSend.gain.value = dlySend.gain.value = 0; res.frequency.value = 20000; res.Q.value = 1; fx = fxParams();
   };
   build();
-  let wobble = 0, det = 0;
+  let wobble = 0;
 
   const noise = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
   const nd = noise.getChannelData(0);
@@ -54,9 +54,10 @@ export function createAudio(ac) {
     e.connect(dest || vin);
     return e;
   };
-  const osc = (type, hz, cents, t, end, out) => {
+  const osc = (type, hz, cents, t, end, out, extra = 0) => {
+    for (let i = 1; i <= extra; i++) osc(type, hz, cents + (i % 2 ? 10 : -10), t, end, out); // unison layers
     const o = ac.createOscillator();
-    o.type = type; o.frequency.value = hz; o.detune.value = cents + det + (Math.random() * 2 - 1) * wobble * 50;
+    o.type = type; o.frequency.value = hz; o.detune.value = cents + (Math.random() * 2 - 1) * wobble * 50;
     o.connect(out); o.start(t); o.stop(end);
   };
   const noiseSrc = (t, dur, out) => {
@@ -65,10 +66,10 @@ export function createAudio(ac) {
   };
 
   const patches = {
-    arp: (hz, t, d, v, e) => osc('square', hz, 0, t, t + d + 0.05, e),
-    bass: (hz, t, d, v, e) => osc('sawtooth', hz, 0, t, t + d + 0.05, e),
-    lead: (hz, t, d, v, e) => [-12, 0, 12].forEach(c => osc('sawtooth', hz, c, t, t + d + 0.05, e)),
-    pad: (hz, t, d, v, e) => [-7, 7].forEach(c => osc('sawtooth', hz, c, t, t + d + 0.05, e)),
+    arp: (hz, t, d, x, e) => osc('square', hz, 0, t, t + d + 0.05, e, x),
+    bass: (hz, t, d, x, e) => osc('sawtooth', hz, 0, t, t + d + 0.05, e, x),
+    lead: (hz, t, d, x, e) => [-12, 0, 12].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 0.05, e, i ? 0 : x)),
+    pad: (hz, t, d, x, e) => [-7, 7].forEach((c, i) => osc('sawtooth', hz, c, t, t + d + 0.05, e, i ? 0 : x)),
   };
 
   return {
@@ -79,8 +80,7 @@ export function createAudio(ac) {
         hp.connect(env(time, 0.03, vel)); noiseSrc(time, 0.04, hp); return;
       }
       const extra = Math.floor(fx.unison / 2), pad = patch === 'pad', e = env(time, dur, vel / Math.sqrt(1 + extra), pad ? 0.4 : 0.004);
-      for (let i = 0; i <= extra; i++) { det = i ? (i % 2 ? 10 : -10) : 0; patches[patch](midiToHz(midi), time, dur, vel, e); }
-      det = 0;
+      patches[patch](midiToHz(midi), time, dur, extra, e);
     },
     kick(time) {
       const o = ac.createOscillator(); o.type = 'sine';
@@ -126,6 +126,6 @@ export function createAudio(ac) {
     },
     setTempo(bpm, time) { dly.delayTime.setValueAtTime(30 / bpm, time); }, // 1/8 note
     detune(a) { wobble = a; },
-    newRun() { bus.disconnect(); build(); }, // silences leftover scheduled sources
+    newRun() { for (const n of [bus, vin, kin, revSend, dlySend, conv, dly, fb]) n.disconnect(); build(); }, // silences leftover scheduled sources
   };
 }

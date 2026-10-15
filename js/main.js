@@ -72,10 +72,10 @@ function fire(o) {
   const { v, level, step } = o, st = stats(progress), x = player.x, y = player.y;
   const dmg = v.damage(level) * (st.damage + (step % 4 === 0 ? st.kickBonus : 0)) * (o.mult || 1);
   const shot = (vx, vy, life, kind) => shots.push({ x, y, vx, vy, dmg, life, kind, level, area: st.area });
-  const fan = (vx, vy, life, kind) => { // projectiles: speed/life scaled, extra copies at ±12°, ±24°...
+  const fan = (vx, vy, life, kind) => { // projectiles: velocity scaled, extra copies at ±12°, ±24°...
     for (let k = 0; k <= st.extraShots; k++) {
       const a = (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 15, c = Math.cos(a), sn = Math.sin(a);
-      shot((vx * c - vy * sn) * st.speed, (vx * sn + vy * c) * st.speed, life * st.speed, kind);
+      shot((vx * c - vy * sn) * st.speed, (vx * sn + vy * c) * st.speed, life, kind);
     }
   };
   if (st.echo && !o.echo) { queue.push({ ...o, time: o.time + 2 * clock.stepDur(), mult: st.echo, echo: true }); queue.sort((p, q) => p.time - q.time); }
