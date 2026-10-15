@@ -18,6 +18,11 @@ test('v2 unlocks', () => {
   assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 610, won: false, evolved: 0 }), ['bass','lead']);
   assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 900, won: true, evolved: 1 }), ['bass','lead','pad','hats']);
 });
+test('unlock boundaries', () => {
+  const u = s => checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: s, won: false, evolved: 0 });
+  assert.deepEqual(u(299), []); assert.deepEqual(u(300), ['bass']);
+  assert.deepEqual(u(599), ['bass']); assert.deepEqual(u(600), ['bass','lead']);
+});
 test('v1 save still loads', () => {
   const s = { getItem: () => JSON.stringify({ unlocked: ['kick','arp','bass'], best: 4 }) };
   assert.deepEqual(load(s), { unlocked: ['kick','arp','bass'], best: 4 });

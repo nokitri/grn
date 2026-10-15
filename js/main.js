@@ -250,6 +250,7 @@ function frame(t) {
   g.beginPath(); g.arc(player.x, player.y, r + 10, -Math.PI / 2, -Math.PI / 2 + run.harmony * 2 * Math.PI); g.stroke();
   g.shadowBlur = 0;
   g.fillRect(0, 0, w * progress.xp / xpToNext(progress.level), 3); // xp bar
+  hud.textContent = mmss(run.elapsed) + '\n' + String(clock.bpm()).padStart(3, '0') + ' bpm';
 }
 
 function reset() {
@@ -267,7 +268,7 @@ function begin() {
   ac = new AudioContext(); ac.resume();
   audio = createAudio(ac);
   clock = createClock(ac, onStep); reset();
-  start.hidden = true;
+  start.hidden = true; hud.hidden = false;
   requestAnimationFrame(frame);
 }
 addEventListener('pointerdown', begin); addEventListener('keydown', begin);
