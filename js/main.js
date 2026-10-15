@@ -3,7 +3,7 @@ import { createRun, phaseAt, bpmAt, RUN_SECONDS } from './phase.js';
 import { createAudio } from './audio.js';
 import { voiceDef } from './voices.js';
 import { createProgress, gainXp, xpToNext, rollChoices, applyChoice, stats } from './upgrades.js';
-import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
+import { ENEMIES, spawnWave, spawnReinforcements, recycleEnemy, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
 import { createDraw } from './draw.js';
@@ -71,6 +71,8 @@ function onStep(step, time, dur) {
   if (picking) { playVoices(s, bar, phase, dur, time); return; }
   cycle = p.cycle;
   if (phase !== lastPhase) { onPhase(phase, time); lastPhase = phase; }
+  if (gameOver) return;
+  if (s === 0) enemies.push(...spawnReinforcements(phase, cycle, enemies.length, ...view()));
   if (phase === 'build') {
     const b = p.barInPhase;
     if (b === 3 && s === 0) { clock.setBpm(bpmAt(run.elapsed)); audio.setTempo(bpmAt(run.elapsed), time + 16 * dur); finalDrop = run.elapsed >= RUN_SECONDS; } // lands on the drop's first bar
@@ -250,8 +252,7 @@ function updateEnemies(dt) {
     if (e.frozen > 0) e.frozen -= dt;
     else if (!e.held && !(buff.stutter > 0)) def.move(e, player, dt);
     for (const o of solid) pushOut(e, o);
-    const far = 1.5 * Math.max(w, h) / cam.z;
-    if (!e.held && Math.hypot(e.x - player.x, e.y - player.y) > far) { e.x = 1.5 * player.x - 0.5 * e.x; e.y = 1.5 * player.y - 0.5 * e.y; } // left behind: respawn ahead, just off screen
+    recycleEnemy(e, ...view());
     if (Math.hypot(e.x - player.x, e.y - player.y) < e.r + player.r) hurt();
   }
   for (let i = hostile.length - 1; i >= 0; i--) {

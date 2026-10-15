@@ -58,15 +58,44 @@ export function makeEnemy(type, x, y, cycle) {
   return { type, x, y, hp: ENEMIES[type].hp(cycle), r: ENEMIES[type].r, slow: 1, held: false, xp: type === 'shard' ? 2 : 1 };
 }
 
-// build waves are the drop swarm, held at the edges until released.
-export function spawnWave(phase, cycle, w, h, ox = 0, oy = 0) { // w,h,ox,oy: view size and top-left in world
-  const n = phase === 'breakdown' ? 3 : 12 + 6 * cycle;
+// Keep the whole enemy beyond the camera, including pulser expansion and trails.
+export function offscreenPosition(w, h, ox = 0, oy = 0, rng = Math.random) {
+  const margin = 96, u = rng(), side = Math.floor(rng() * 4);
+  return {
+    x: ox + (side < 2 ? u * w : side === 2 ? -margin : w + margin),
+    y: oy + (side < 2 ? (side ? h + margin : -margin) : u * h),
+  };
+}
+
+function spawn(phase, cycle, count, w, h, ox, oy, held, rng) {
   const pool = phase === 'breakdown' ? ['drifter'] : Object.keys(ENEMIES).filter(k => ENEMIES[k].unlock <= cycle);
-  return Array.from({ length: n }, () => {
-    const u = Math.random(), side = Math.floor(Math.random() * 4);
-    const x = side < 2 ? u * w : side === 2 ? 0 : w, y = side < 2 ? (side ? h : 0) : u * h;
-    const e = makeEnemy(pool[Math.floor(Math.random() * pool.length)], ox + x, oy + y, cycle);
-    e.held = phase === 'build';
+  return Array.from({ length: count }, () => {
+    const { x, y } = offscreenPosition(w, h, ox, oy, rng);
+    const e = makeEnemy(pool[Math.floor(rng() * pool.length)], x, y, cycle);
+    e.held = held;
     return e;
   });
+}
+
+// Build waves wait outside the view until the drop releases them.
+export function spawnWave(phase, cycle, w, h, ox = 0, oy = 0, rng = Math.random) {
+  return spawn(phase, cycle, phase === 'breakdown' ? 3 : 12 + 6 * cycle, w, h, ox, oy, phase === 'build', rng);
+}
+
+// A fresh trickle every musical bar keeps pressure coming from every direction.
+// Leave room for phase waves while bounding sustained reinforcement growth.
+export function spawnReinforcements(phase, cycle, population, w, h, ox = 0, oy = 0, rng = Math.random) {
+  const rate = phase === 'breakdown' ? 1 : (phase === 'build' ? 2 : 3) + Math.min(cycle, 5);
+  const count = Math.max(0, Math.min(rate, 240 - population));
+  return spawn(phase, cycle, count, w, h, ox, oy, false, rng);
+}
+
+export function recycleEnemy(e, w, h, ox = 0, oy = 0, rng = Math.random) {
+  const margin = 320;
+  if (e.held || (e.x >= ox - margin && e.x <= ox + w + margin && e.y >= oy - margin && e.y <= oy + h + margin)) return false;
+  Object.assign(e, offscreenPosition(w, h, ox, oy, rng));
+  // A chain must not draw a line back to its old position across the screen.
+  if (e.trail) e.trail = [];
+  e.lunge = 0;
+  return true;
 }
