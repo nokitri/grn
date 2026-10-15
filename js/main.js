@@ -205,8 +205,8 @@ function begin() {
   requestAnimationFrame(frame);
 }
 addEventListener('pointerdown', begin); addEventListener('keydown', begin);
-addEventListener('pointerdown', () => { if (gameOver) reset(); });
-addEventListener('keydown', () => { if (gameOver && performance.now() - endedAt > 500) reset(); }); // ignore keys held during play
+const again = () => { if (gameOver && performance.now() - endedAt > 500) reset(); };
+addEventListener('pointerdown', again); addEventListener('keydown', again); // ignore keys held during play
 
 onPause(() => {
   if (!run || gameOver) return;

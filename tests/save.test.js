@@ -18,3 +18,8 @@ test('unlocks', () => {
   assert.deepEqual(checkUnlocks({ unlocked: ['kick', 'arp'] }, { drops: 3, maxedVoices: 0 }), ['bass', 'pad']);
   assert.deepEqual(checkUnlocks({ unlocked: ['kick', 'arp', 'bass'] }, { drops: 1, maxedVoices: 3 }), ['hats', 'lead']);
 });
+test('load sanitizes unlocked and best', () => {
+  const s = v => ({ getItem: () => JSON.stringify(v) });
+  assert.deepEqual(load(s({ unlocked: ['arp', 'bass', 'bass', '<b>x</b>'], best: 2 })), { unlocked: ['kick', 'arp', 'bass'], best: 2 });
+  assert.deepEqual(load(s({ unlocked: [], best: -1 })), D);
+});
