@@ -1,5 +1,5 @@
 import { createClock, SCALE } from './clock.js';
-import { createRun, phaseAt } from './phase.js';
+import { createRun, phaseAt, bpmAt, RUN_SECONDS } from './phase.js';
 import { createAudio } from './audio.js';
 import { VOICES, createLoadout } from './voices.js';
 import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
@@ -13,12 +13,12 @@ const player = { x: 0, y: 0, r: 10, speed: 240 };
 let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
 let w, h, ac, clock, run, audio, loadout, paused = false, last = 0;
-let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, t0 = 0;
+let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, finalDrop = false;
 const enemies = [], shots = [], queue = [], orbs = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
 
 function onPhase(phase, time) {
-  if (lastPhase === 'drop') run.drops++;
+  if (lastPhase === 'drop') { run.drops++; if (finalDrop && !run.over) { run.won = true; endRun(); return; } }
   if (phase === 'breakdown') {
     enemies.push(...spawnWave('breakdown', cycle, w, h));
     for (let i = 0; i < 2; i++) orbs.push({ x: 40 + Math.random() * (w - 80), y: 40 + Math.random() * (h - 80), name: data.unlocked[Math.floor(Math.random() * data.unlocked.length)] });
@@ -29,6 +29,7 @@ function onPhase(phase, time) {
     audio.riser(time, clock.stepDur() * 64);
   } else {
     d.setHue(cycle);
+    if (finalDrop) enemies.push(...spawnWave('drop', cycle, w, h), ...spawnWave('drop', cycle, w, h));
     for (const e of enemies) e.held = false;
     audio.setFilter(1, time);
   }
@@ -40,6 +41,7 @@ function onStep(step, time, dur) {
   if (phase !== lastPhase) { onPhase(phase, time); lastPhase = phase; }
   if (phase === 'build') {
     const b = p.barInPhase;
+    if (b === 3 && s === 0) { clock.setBpm(bpmAt(run.elapsed)); finalDrop = run.elapsed >= RUN_SECONDS; } // lands on the drop's first bar
     if (s % (b < 2 ? 4 : b === 2 ? 2 : 1) === 0) audio.snare(time);
     audio.setFilter(0.2 + 0.8 * (b * 16 + s) / 64, time);
   }
@@ -105,14 +107,18 @@ function hurt() {
   invuln = 1;
   const over = run.hit(0.1);
   audio.detune(1 - run.harmony);
-  if (over) { clock.stop(); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(audio.master.gain.value, ac.currentTime); audio.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.1); gameOver = true; endedAt = performance.now(); showResults(); }
+  if (over) endRun();
+}
+
+function endRun() {
+  clock.stop(); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(audio.master.gain.value, ac.currentTime); audio.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.1); gameOver = true; endedAt = performance.now(); showResults();
 }
 
 function showResults() {
   const maxedVoices = [...loadout.voices.values()].filter(l => l >= 5).length;
   const fresh = checkUnlocks(data, { drops: run.drops, maxedVoices });
   data.unlocked.push(...fresh); data.best = Math.max(data.best, run.drops); save(store, data);
-  results.innerHTML = `<h2>&gt; harmony lost</h2><p>drops survived: ${run.drops}</p><p>best: ${data.best}</p>`
+  results.innerHTML = `<h2>&gt; ${run.won ? 'set complete' : 'harmony lost'}</h2><p>drops survived: ${run.drops}</p><p>best: ${data.best}</p>`
     + (fresh.length ? `<p>unlocked: ${fresh.join(', ')}</p>` : '') + '<p>tap to play again</p>';
   results.hidden = false;
 }
@@ -168,7 +174,9 @@ addEventListener('resize', size); size();
 function frame(t) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
-  if (!paused && !gameOver) {
+  const live = !paused && !gameOver;
+  if (live) {
+    run.elapsed += dt;
     clock.tick();
     const m = readMove();
     if (m.x || m.y) { const n = Math.hypot(m.x, m.y); dir.x = m.x / n; dir.y = m.y / n; }
@@ -179,7 +187,7 @@ function frame(t) {
     updateShots(dt); updateEnemies(dt);
   }
   d.fade();
-  const live = !paused && !gameOver, pos = clock.position();
+  const pos = clock.position();
   d.background(t / 1000, lastPhase, Math.floor(pos.bar / 2) % 4, 1 - pos.beatFrac); // pulse 1 on each beat (kick step), decays over the beat
   const P = '#ff4fd8', r = player.r;
   g.shadowColor = P; g.shadowBlur = 16; g.fillStyle = P; g.strokeStyle = P; g.lineWidth = 3;
@@ -196,9 +204,9 @@ function reset() {
   for (const a of [enemies, shots, queue, orbs, hostile]) a.length = 0;
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun();
   run = createRun(); loadout = createLoadout(); audio.detune(0);
-  lastPhase = null; cycle = 0; invuln = 0; gameOver = false; results.hidden = true;
+  lastPhase = null; cycle = 0; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
   player.x = w / 2; player.y = h / 2;
-  clock.start(); t0 = ac.currentTime + 0.05; // matches clock.start's first step time
+  clock.start();
 }
 
 function begin() {
