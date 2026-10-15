@@ -1,7 +1,8 @@
 import { createClock, SCALE } from './clock.js';
 import { createRun, phaseAt, bpmAt, RUN_SECONDS } from './phase.js';
 import { createAudio } from './audio.js';
-import { VOICES, createLoadout } from './voices.js';
+import { VOICES } from './voices.js';
+import { createProgress, gainXp, xpToNext } from './upgrades.js';
 import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
@@ -12,19 +13,17 @@ const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
 let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
-let w, h, ac, clock, run, audio, loadout, paused = false, last = 0;
+let w, h, ac, clock, run, audio, progress, levelsPending = 0, paused = false, last = 0;
 let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, finalDrop = false;
-const enemies = [], shots = [], queue = [], orbs = [], hostile = [];
+const enemies = [], shots = [], queue = [], gems = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
 
 function onPhase(phase, time) {
   if (lastPhase === 'drop') { run.drops++; if (finalDrop && !run.over) { run.won = true; endRun(); return; } }
   if (phase === 'breakdown') {
     enemies.push(...spawnWave('breakdown', cycle, w, h));
-    for (let i = 0; i < 2; i++) orbs.push({ x: 40 + Math.random() * (w - 80), y: 40 + Math.random() * (h - 80), name: data.unlocked[Math.floor(Math.random() * data.unlocked.length)] });
     audio.setFilter(0.2, time);
   } else if (phase === 'build') {
-    orbs.length = 0;
     enemies.push(...spawnWave('build', cycle, w, h));
     audio.riser(time, clock.stepDur() * 64);
   } else {
@@ -50,7 +49,7 @@ function onStep(step, time, dur) {
     if (e.held || !def.onBeat || (s % 4 === 0) !== (e.type !== 'shard')) continue; // shard fires on off-beats
     const shot = def.onBeat(e, player); if (shot) hostile.push(shot);
   }
-  for (const [name, level] of loadout.voices) {
+  for (const [name, level] of progress.voices) {
     const v = VOICES[name];
     if (!v.pattern(level)[s] || (name === 'kick' && phase !== 'drop')) continue;
     if (name === 'kick') audio.kick(time);
@@ -115,7 +114,7 @@ function endRun() {
 }
 
 function showResults() {
-  const maxedVoices = [...loadout.voices.values()].filter(l => l >= 5).length;
+  const maxedVoices = [...progress.voices.values()].filter(l => l >= 5).length;
   const fresh = checkUnlocks(data, { drops: run.drops, maxedVoices });
   data.unlocked.push(...fresh); data.best = Math.max(data.best, run.drops); save(store, data);
   results.innerHTML = `<h2>&gt; ${run.won ? 'set complete' : 'harmony lost'}</h2><p>drops survived: ${run.drops}</p><p>best: ${data.best}</p>`
@@ -133,7 +132,8 @@ function updateEnemies(dt) {
       enemies.splice(i, 1);
       d.burst(e.x, e.y, still ? 4 : 8);
       audio.blip(SCALE[Math.floor(Math.random() * SCALE.length)] + 24, nextStep);
-      def.onDeath?.(e, (type, x, y) => enemies.push(makeEnemy(type, x, y, cycle)));
+      gems.push({ x: e.x, y: e.y, xp: e.xp });
+      def.onDeath?.(e, (type, x, y) => enemies.push({ ...makeEnemy(type, x, y, cycle), xp: 2 })); // splitter children
       continue;
     }
     if (!e.held) def.move(e, player, dt);
@@ -144,7 +144,12 @@ function updateEnemies(dt) {
     if (Math.hypot(b.x - player.x, b.y - player.y) < player.r + 3) { hurt(); b.life = 0; }
     if (b.life <= 0) hostile.splice(i, 1);
   }
-  for (let i = orbs.length - 1; i >= 0; i--) if (Math.hypot(orbs[i].x - player.x, orbs[i].y - player.y) < player.r + 10) { loadout.add(orbs[i].name); orbs.splice(i, 1); }
+  const magnet = lastPhase === 'breakdown' ? 240 : 80;
+  for (let i = gems.length - 1; i >= 0; i--) {
+    const q = gems[i], dx = player.x - q.x, dy = player.y - q.y, dist = Math.hypot(dx, dy);
+    if (dist < player.r + 4) { levelsPending += gainXp(progress, q.xp); gems.splice(i, 1); }
+    else if (dist < magnet) { q.x += dx / dist * 400 * dt; q.y += dy / dist * 400 * dt; }
+  }
 }
 
 function drawShots() {
@@ -163,8 +168,7 @@ function drawWorld(t) {
   g.shadowBlur = d.glow ? 16 : 0;
   for (const e of enemies) ENEMIES[e.type].draw(g, e, t);
   for (const b of hostile) { g.beginPath(); g.arc(b.x, b.y, 3, 0, 2 * Math.PI); g.fill(); }
-  g.font = '16px VT323, monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  for (const o of orbs) { g.beginPath(); g.arc(o.x, o.y, 10, 0, 2 * Math.PI); g.stroke(); g.fillText(o.name[0], o.x, o.y + 1); }
+  for (const q of gems) { g.beginPath(); g.moveTo(q.x, q.y - 4); g.lineTo(q.x + 4, q.y); g.lineTo(q.x, q.y + 4); g.lineTo(q.x - 4, q.y); g.closePath(); g.fill(); }
 }
 
 function clamp() { player.x = Math.min(w - player.r, Math.max(player.r, player.x)); player.y = Math.min(h - player.r, Math.max(player.r, player.y)); }
@@ -198,12 +202,13 @@ function frame(t) {
   g.shadowBlur = 16; g.strokeStyle = P;
   g.beginPath(); g.arc(player.x, player.y, r + 10, -Math.PI / 2, -Math.PI / 2 + run.harmony * 2 * Math.PI); g.stroke();
   g.shadowBlur = 0;
+  g.fillRect(0, 0, w * progress.xp / xpToNext(progress.level), 3); // xp bar
 }
 
 function reset() {
-  for (const a of [enemies, shots, queue, orbs, hostile]) a.length = 0;
+  for (const a of [enemies, shots, queue, gems, hostile]) a.length = 0;
   d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun();
-  run = createRun(); loadout = createLoadout(); audio.detune(0);
+  run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
   lastPhase = null; cycle = 0; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
   player.x = w / 2; player.y = h / 2;
   clock.start();

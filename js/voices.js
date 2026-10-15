@@ -18,7 +18,3 @@ export const VOICES = {
   hats: voice('hats', 'spark', 1, l => l < 3 ? steps([2, 6, 10, 14]) : spread([8, 12, 16][l - 3]), root),
 };
 
-export function createLoadout() {
-  const voices = new Map([['kick', 1], ['arp', 1]]);
-  return { voices, add(name) { voices.set(name, Math.min(5, (voices.get(name) || 0) + 1)); } };
-}

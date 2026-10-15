@@ -55,7 +55,7 @@ export const ENEMIES = {
 };
 
 export function makeEnemy(type, x, y, cycle) {
-  return { type, x, y, hp: ENEMIES[type].hp(cycle), r: ENEMIES[type].r, slow: 1, held: false };
+  return { type, x, y, hp: ENEMIES[type].hp(cycle), r: ENEMIES[type].r, slow: 1, held: false, xp: type === 'shard' ? 2 : 1 };
 }
 
 // build waves are the drop swarm, held at the edges until released.
