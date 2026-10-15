@@ -23,3 +23,24 @@ test('step counter stays aligned across a stall', () => {
   ac.currentTime = 30; got.length = 0; c.tick();
   assert.ok(got[0] > STEPS_PER_BAR);
 });
+test('setBpm applies at the next bar boundary', () => {
+  const ac = { currentTime: 0 }, durs = [];
+  const c = createClock(ac, (s, t, d) => durs.push([s, d]));
+  c.start(); c.tick(); c.setBpm(170);
+  for (let i = 0; i < 400; i++) { ac.currentTime += 0.05; c.tick(); }
+  const at = s => durs.find(x => x[0] === s)[1];
+  assert.equal(at(15), 60 / 128 / 4);
+  assert.equal(at(16), 60 / 170 / 4);
+});
+test('steps stay contiguous across a tempo change', () => {
+  const ac = { currentTime: 0 }, got = [];
+  const c = createClock(ac, s => got.push(s)); c.start();
+  for (let i = 0; i < 100; i++) { if (i === 40) c.setBpm(150); ac.currentTime += 0.05; c.tick(); }
+  got.forEach((s, i) => assert.equal(s, i));
+});
+test('position reports bar after a stall', () => {
+  const ac = { currentTime: 0 }; const c = createClock(ac, () => {}); c.start(); c.tick();
+  ac.currentTime = 30; c.tick();
+  assert.equal(c.position().bar, Math.floor(c.position().step / 16));
+  assert.ok(c.position().step > 200);
+});

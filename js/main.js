@@ -1,4 +1,4 @@
-import { createClock, stepDur, SCALE } from './clock.js';
+import { createClock, SCALE } from './clock.js';
 import { createRun, phaseAt } from './phase.js';
 import { createAudio } from './audio.js';
 import { VOICES, createLoadout } from './voices.js';
@@ -26,7 +26,7 @@ function onPhase(phase, time) {
   } else if (phase === 'build') {
     orbs.length = 0;
     enemies.push(...spawnWave('build', cycle, w, h));
-    audio.riser(time, stepDur * 64);
+    audio.riser(time, clock.stepDur() * 64);
   } else {
     d.setHue(cycle);
     for (const e of enemies) e.held = false;
@@ -34,7 +34,7 @@ function onPhase(phase, time) {
   }
 }
 
-function onStep(step, time) {
+function onStep(step, time, dur) {
   const s = step % 16, bar = Math.floor(step / 16), p = phaseAt(bar), phase = p.name;
   cycle = p.cycle;
   if (phase !== lastPhase) { onPhase(phase, time); lastPhase = phase; }
@@ -52,7 +52,7 @@ function onStep(step, time) {
     const v = VOICES[name];
     if (!v.pattern(level)[s] || (name === 'kick' && phase !== 'drop')) continue;
     if (name === 'kick') audio.kick(time);
-    else audio.play(v.patch, v.note(s, bar, level), time, { dur: name === 'pad' ? stepDur * 16 : stepDur, vel: 0.3 * (phase === 'drop' ? 1 : 0.4) });
+    else audio.play(v.patch, v.note(s, bar, level), time, { dur: name === 'pad' ? dur * 16 : dur, vel: 0.3 * (phase === 'drop' ? 1 : 0.4) });
     queue.push({ time, v, level });
   }
 }
@@ -120,7 +120,7 @@ function showResults() {
 function updateEnemies(dt) {
   for (const e of enemies) e.slow = 1;
   for (const s of shots) for (const e of enemies) damage(s, e, dt);
-  const nextStep = t0 + Math.ceil((ac.currentTime - t0) / stepDur) * stepDur;
+  const nextStep = ac.currentTime + (1 - (clock.position().beatFrac * 4) % 1) * clock.stepDur();
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i], def = ENEMIES[e.type];
     if (e.hp <= 0) {
@@ -179,8 +179,8 @@ function frame(t) {
     updateShots(dt); updateEnemies(dt);
   }
   d.fade();
-  const live = !paused && !gameOver, bar = Math.floor(Math.max(0, ac.currentTime - t0) / (stepDur * 16));
-  d.background(t / 1000, lastPhase, Math.floor(bar / 2) % 4, 1 - ((Math.max(0, ac.currentTime - t0) / stepDur) % 4) / 4); // pulse 1 on each beat (kick step), decays over the beat
+  const live = !paused && !gameOver, pos = clock.position();
+  d.background(t / 1000, lastPhase, Math.floor(pos.bar / 2) % 4, 1 - pos.beatFrac); // pulse 1 on each beat (kick step), decays over the beat
   const P = '#ff4fd8', r = player.r;
   g.shadowColor = P; g.shadowBlur = 16; g.fillStyle = P; g.strokeStyle = P; g.lineWidth = 3;
   g.globalAlpha = invuln > 0 && !still && Math.floor(t / 80) % 2 ? 0.3 : 1; // blink while invulnerable
