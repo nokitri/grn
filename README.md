@@ -1,4 +1,4 @@
-# GRN / Afterhours
+# grn
 
 A browser survival game where instruments are weapons and effects shape your build. Survive 15 minutes and the final drop. Vanilla JavaScript, Canvas 2D, and Web Audio; no dependencies or build step.
 

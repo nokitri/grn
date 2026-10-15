@@ -106,7 +106,7 @@ export function recycleEnemy(e, w, h, ox = 0, oy = 0, rng = Math.random) {
 }
 
 
-export const ENEMY_COLORS = { drifter: '#ff887e', pulser: '#ffb16b', chain: '#f47dab', splitter: '#de9bf4', shard: '#ffc67d', sentinel: '#ff6379' };
+export const ENEMY_COLORS = { drifter: '#5ff2ff', pulser: '#8affff', chain: '#53d9ff', splitter: '#a4f7ff', shard: '#5ff2ff', sentinel: '#c0ffff' };
 
 // Attacks lock their aim before firing. Telegraphs give players time to dodge.
 export function advanceEnemy(e, player, dt) {

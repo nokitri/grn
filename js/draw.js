@@ -13,14 +13,14 @@ export function createDraw(g) {
       lastFade = now;
       if (d.glow && times.length === 60 && times.reduce((a, b) => a + b) / 60 > 20) d.glow = false;
       g.shadowBlur = 0; // else the fade rect itself glows
-      g.fillStyle = still() ? 'rgba(7,16,28,.6)' : 'rgba(7,16,28,.3)'; g.fillRect(0, 0, g.canvas.clientWidth, g.canvas.clientHeight);
+      g.fillStyle = still() ? 'rgba(5,5,5,.35)' : 'rgba(5,5,5,.18)'; g.fillRect(0, 0, g.canvas.clientWidth, g.canvas.clientHeight);
     },
     background(t, phase, chordIndex, beatPulse, cx, cy) { // cx,cy: screen centre of the polygons (the player)
       const w = g.canvas.clientWidth, h = g.canvas.clientHeight, build = phase === 'build';
       g.save(); saved = true;
       if (jolt > 0) { g.translate((Math.random() * 2 - 1) * 4, (Math.random() * 2 - 1) * 4); jolt--; }
       const sides = 3 + chordIndex, rot = t * 0.2 * (build ? 3 : 1), base = Math.min(w, h) * 0.09 * (build ? 0.7 : 1);
-      g.shadowBlur = 0; g.strokeStyle = '#58dbc4'; g.lineWidth = 1; g.globalAlpha = 0.07;
+      g.shadowBlur = 0; g.strokeStyle = '#ff4fd8'; g.lineWidth = 1; g.globalAlpha = 0.25;
       for (let i = 1; i <= 5; i++) {
         const r = base * i * (1 + 0.06 * beatPulse);
         g.beginPath();
@@ -28,7 +28,7 @@ export function createDraw(g) {
         g.stroke();
       }
       g.globalAlpha = 1;
-      if (flash > 0) { g.fillStyle = `rgba(150,245,224,${0.07 * flash})`; g.fillRect(-8, -8, w + 16, h + 16); flash = Math.max(0, flash - 0.25); }
+      if (flash > 0) { g.fillStyle = `rgba(255,220,245,${0.1 * flash})`; g.fillRect(-8, -8, w + 16, h + 16); flash = Math.max(0, flash - 0.25); }
     },
     burst(x, y, n) { for (let k = 0; k < n; k++) { const a = Math.random() * 2 * Math.PI, v = 80 + Math.random() * 160; parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.4 }); } },
     particles(dt) {

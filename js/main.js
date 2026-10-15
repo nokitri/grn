@@ -16,7 +16,7 @@ const levelup = document.getElementById('levelup'), cardsEl = document.getElemen
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
 const cam = { x: 0, y: 0, z: 1, punch: 0 }; // world → screen: centred on cam, scaled by z
-const P = '#70efd2', A = '#ff887e', GRID = '#2a6471';
+const P = '#ff4fd8', A = '#5ff2ff', GRID = '#5ff2ff';
 const view = () => [w / cam.z, h / cam.z, cam.x - w / 2 / cam.z, cam.y - h / 2 / cam.z]; // view size + top-left in world
 let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
@@ -295,7 +295,7 @@ const PICK_MARK = { stutter: '‖', double: '×2', bomb: '✱', magnet: 'U', swe
 function drawObjects(t) {
   g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = 'bold 16px monospace'; g.lineWidth = 2;
   g.globalAlpha = 1; g.shadowBlur = d.glow ? 12 : 0;
-  g.strokeStyle = g.shadowColor = g.fillStyle = '#f4d88b';
+  g.strokeStyle = g.shadowColor = g.fillStyle = '#5ff2ff';
   for (const q of pickups) { g.save(); g.translate(q.x, q.y); g.rotate(t); g.strokeRect(-11, -11, 22, 22); g.restore(); g.fillText(PICK_MARK[q.type], q.x, q.y + 1); }
   g.lineWidth = 2;
 }
@@ -313,15 +313,15 @@ function drawWorld(t) {
       g.stroke(); g.restore();
     }
     ENEMIES[e.type].draw(g, e, t);
-    if (e.elite) { g.fillStyle = '#293947'; g.fillRect(e.x - 24, e.y - e.r - 12, 48, 4); g.fillStyle = '#ffc67d'; g.fillRect(e.x - 24, e.y - e.r - 12, 48 * Math.max(0, e.hp / e.maxHp), 4); }
+    if (e.elite) { g.fillStyle = '#193d40'; g.fillRect(e.x - 24, e.y - e.r - 12, 48, 4); g.fillStyle = '#5ff2ff'; g.fillRect(e.x - 24, e.y - e.r - 12, 48 * Math.max(0, e.hp / e.maxHp), 4); }
   }
-  g.lineWidth = 2; g.fillStyle = g.shadowColor = '#ffbe8c';
+  g.lineWidth = 2; g.fillStyle = g.shadowColor = '#5ff2ff';
   for (const b of hostile) { g.beginPath(); g.arc(b.x, b.y, b.r || 3, 0, 2 * Math.PI); g.fill(); }
   g.shadowColor = g.strokeStyle = g.fillStyle = P;
   for (const q of gems) { g.beginPath(); g.moveTo(q.x, q.y - 4); g.lineTo(q.x + 4, q.y); g.lineTo(q.x, q.y + 4); g.lineTo(q.x - 4, q.y); g.closePath(); g.fill(); }
 }
 
-function size() { const d = Math.min(2, devicePixelRatio || 1); w = c.clientWidth; h = c.clientHeight; c.width = w * d; c.height = h * d; g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = '#07101c'; g.fillRect(0, 0, w, h); }
+function size() { const d = Math.min(2, devicePixelRatio || 1); w = c.clientWidth; h = c.clientHeight; c.width = w * d; c.height = h * d; g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = '#050505'; g.fillRect(0, 0, w, h); }
 addEventListener('resize', size); size();
 
 function frame(t) {
@@ -437,7 +437,7 @@ function openPick() {
   picking = true; queue.length = 0; clearInput();
   cards = rollChoices(progress, Math.random, run.harmony);
   cardsEl.innerHTML = cards.map((c, i) => `<button class="card ${c.kind === 'evolve' ? 'evolution' : ''}" type="button" data-i="${i}">${cardHtml(c, i)}</button>`).join('');
-  document.getElementById('pick-level').textContent = `LEVEL ${progress.level} · SHAPE YOUR SOUND`;
+  document.getElementById('pick-level').textContent = `level ${progress.level}`;
   document.getElementById('reroll').textContent = `Reroll · ${rerolls} left [R]`;
   document.getElementById('reroll').disabled = rerolls <= 0;
   levelup.hidden = false; filterAll(.25, ac.currentTime);
