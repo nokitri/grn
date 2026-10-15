@@ -2,7 +2,7 @@ import { createClock, SCALE } from './clock.js';
 import { createRun, phaseAt, bpmAt, RUN_SECONDS } from './phase.js';
 import { createAudio } from './audio.js';
 import { VOICES } from './voices.js';
-import { createProgress, gainXp, xpToNext, rollChoices, applyChoice } from './upgrades.js';
+import { createProgress, gainXp, xpToNext, rollChoices, applyChoice, stats } from './upgrades.js';
 import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
@@ -44,7 +44,7 @@ function onStep(step, time, dur) {
   if (phase !== lastPhase) { onPhase(phase, time); lastPhase = phase; }
   if (phase === 'build') {
     const b = p.barInPhase;
-    if (b === 3 && s === 0) { clock.setBpm(bpmAt(run.elapsed)); finalDrop = run.elapsed >= RUN_SECONDS; } // lands on the drop's first bar
+    if (b === 3 && s === 0) { clock.setBpm(bpmAt(run.elapsed)); audio.setTempo(bpmAt(run.elapsed), time + 16 * dur); finalDrop = run.elapsed >= RUN_SECONDS; } // lands on the drop's first bar
     if (s % (b < 2 ? 4 : b === 2 ? 2 : 1) === 0) audio.snare(time);
     audio.setFilter(0.2 + 0.8 * (b * 16 + s) / 64, time);
   }
@@ -53,7 +53,7 @@ function onStep(step, time, dur) {
     if (e.held || !def.onBeat || (s % 4 === 0) !== (e.type !== 'shard')) continue; // shard fires on off-beats
     const shot = def.onBeat(e, player); if (shot) hostile.push(shot);
   }
-  for (const [v, level] of playVoices(s, bar, phase, dur, time)) queue.push({ time, v, level });
+  for (const [v, level] of playVoices(s, bar, phase, dur, time)) queue.push({ time, v, level, step: s });
 }
 
 function playVoices(s, bar, phase, dur, time) {
@@ -68,34 +68,42 @@ function playVoices(s, bar, phase, dur, time) {
   return fired;
 }
 
-function fire({ v, level }) {
-  const dmg = v.damage(level), x = player.x, y = player.y;
-  const shot = (vx, vy, life, kind) => shots.push({ x, y, vx, vy, dmg, life, kind, level });
-  if (v === VOICES.kick && lastPhase === 'drop') d.kickFlash();
+function fire(o) {
+  const { v, level, step } = o, st = stats(progress), x = player.x, y = player.y;
+  const dmg = v.damage(level) * (st.damage + (step % 4 === 0 ? st.kickBonus : 0)) * (o.mult || 1);
+  const shot = (vx, vy, life, kind) => shots.push({ x, y, vx, vy, dmg, life, kind, level, area: st.area });
+  const fan = (vx, vy, life, kind) => { // projectiles: speed/life scaled, extra copies at ±12°, ±24°...
+    for (let k = 0; k <= st.extraShots; k++) {
+      const a = (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 15, c = Math.cos(a), sn = Math.sin(a);
+      shot((vx * c - vy * sn) * st.speed, (vx * sn + vy * c) * st.speed, life * st.speed, kind);
+    }
+  };
+  if (st.echo && !o.echo) { queue.push({ ...o, time: o.time + 2 * clock.stepDur(), mult: st.echo, echo: true }); queue.sort((p, q) => p.time - q.time); }
+  if (v === VOICES.kick && lastPhase === 'drop' && !o.echo) d.kickFlash();
   const aim = speed => {
     let t = null, d = Infinity;
     for (const e of enemies) { const q = (e.x - x) ** 2 + (e.y - y) ** 2; if (q < d) { d = q; t = e; } }
     const dx = t ? t.x - x : dir.x, dy = t ? t.y - y : dir.y, n = Math.hypot(dx, dy) || 1;
     return [dx / n * speed, dy / n * speed];
   };
-  if (v.weapon === 'bolt') shot(...aim(600), 0.8, 'bolt');
-  else if (v.weapon === 'pierce') shot(...aim(250), 2, 'pierce');
+  if (v.weapon === 'bolt') fan(...aim(600), 0.8, 'bolt');
+  else if (v.weapon === 'pierce') fan(...aim(250), 2, 'pierce');
   else if (v.weapon === 'beam') shot(beamDir.x, beamDir.y, 0.1, 'beam'); // vx,vy = unit heading
-  else if (v.weapon === 'spark') for (let i = 0; i < 8; i++) shot(Math.cos(i * Math.PI / 4) * 400, Math.sin(i * Math.PI / 4) * 400, 0.3, 'spark');
+  else if (v.weapon === 'spark') for (let i = 0; i < 8; i++) fan(Math.cos(i * Math.PI / 4) * 400, Math.sin(i * Math.PI / 4) * 400, 0.3, 'spark');
   else shot(0, 0, v.weapon === 'ring' ? 0.25 : 1, v.weapon); // ring / field centred on player
 }
 
-const ringR = s => 20 + (0.25 - s.life) * 400;
+const ringR = s => (20 + (0.25 - s.life) * 400) * s.area;
 function damage(s, e, dt) {
   const dx = e.x - s.x, dy = e.y - s.y, d = Math.hypot(dx, dy);
-  if (s.kind === 'field') { if (d < 120) { e.slow = 0.5; e.hp -= s.dmg * dt; } return; }
+  if (s.kind === 'field') { if (d < 120 * s.area) { e.slow = 0.5; e.hp -= s.dmg * dt; } return; }
   if (s.kind === 'beam') {
     const along = Math.max(0, Math.min(300, dx * s.vx + dy * s.vy));
     if (Math.hypot(dx - s.vx * along, dy - s.vy * along) < e.r) e.hp -= s.dmg * dt * 10; // ~dmg over its 0.1s life
     return;
   }
   if (s.life <= 0 || s.hit?.has(e)) return;
-  if (!(s.kind === 'ring' ? Math.abs(d - ringR(s)) <= 8 : d < e.r)) return;
+  if (!(s.kind === 'ring' ? Math.abs(d - ringR(s)) <= 8 : d < e.r * s.area)) return;
   e.hp -= s.dmg;
   if (s.kind === 'bolt' || s.kind === 'spark') s.life = 0; else (s.hit ||= new Set()).add(e); // ring/pierce: once per enemy
 }
@@ -166,8 +174,8 @@ function drawShots() {
   for (const s of shots) {
     g.beginPath();
     const echo = s.level >= 3; // voice level 3+ adds a visual layer
-    if (s.kind === 'ring') { g.arc(s.x, s.y, ringR(s), 0, 2 * Math.PI); if (echo) { const m = 20 + s.life * 400; g.moveTo(s.x + m, s.y); g.arc(s.x, s.y, m, 0, 2 * Math.PI); } } // mirrored: contracts as the first expands
-    else if (s.kind === 'field') { g.globalAlpha = s.life * 0.4; g.arc(s.x, s.y, 120, 0, 2 * Math.PI); }
+    if (s.kind === 'ring') { g.arc(s.x, s.y, ringR(s), 0, 2 * Math.PI); if (echo) { const m = (20 + s.life * 400) * s.area; g.moveTo(s.x + m, s.y); g.arc(s.x, s.y, m, 0, 2 * Math.PI); } } // mirrored: contracts as the first expands
+    else if (s.kind === 'field') { g.globalAlpha = s.life * 0.4; g.arc(s.x, s.y, 120 * s.area, 0, 2 * Math.PI); }
     else if (s.kind === 'beam') { g.moveTo(s.x, s.y); g.lineTo(s.x + s.vx * 300, s.y + s.vy * 300); if (echo) { const ex = s.x - s.vy * 6, ey = s.y + s.vx * 6; g.moveTo(ex, ey); g.lineTo(ex + s.vx * 300, ey + s.vy * 300); } }
     else { const k = s.kind === 'pierce' ? 0.06 : s.kind === 'bolt' && echo ? 0.06 : 0.02; g.moveTo(s.x, s.y); g.lineTo(s.x - s.vx * k, s.y - s.vy * k); }
     g.stroke(); g.globalAlpha = 1;
@@ -218,7 +226,7 @@ function frame(t) {
 
 function reset() {
   for (const a of [enemies, shots, queue, gems, hostile]) a.length = 0;
-  d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun();
+  d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime); audio.newRun(); audio.setFx({}, ac.currentTime);
   run = createRun(); progress = createProgress(data.unlocked); levelsPending = 0; audio.detune(0);
   lastPhase = null; cycle = 0; picking = false; pickBars = 0; levelup.hidden = true; invuln = 0; gameOver = false; finalDrop = false; results.hidden = true;
   player.x = w / 2; player.y = h / 2;
@@ -268,6 +276,7 @@ function choose(i) {
   const c = cards[i];
   if (!picking || paused || gameOver || !c) return;
   if (c.kind === 'heal') { run.harmony = Math.min(1, run.harmony + 0.2); audio.detune(1 - run.harmony); } else applyChoice(progress, c);
+  audio.setFx({ ...Object.fromEntries(progress.effects), duck: stats(progress).duck }, ac.currentTime);
   levelsPending--; picking = false; levelup.hidden = true;
   audio.setFilter(lastPhase === 'drop' ? 1 : 0.2, ac.currentTime); // shortcut: build snaps to 0.2, its per-step ramp corrects on the next step
   if (levelsPending > 0) openPick();
