@@ -14,9 +14,13 @@ test('round trip', () => {
   assert.equal(load(s).best, 4);
   save({ setItem() { throw new Error(); } }, D); save(undefined, D);
 });
-test('unlocks', () => {
-  assert.deepEqual(checkUnlocks({ unlocked: ['kick', 'arp'] }, { drops: 3, maxedVoices: 0 }), ['bass', 'pad']);
-  assert.deepEqual(checkUnlocks({ unlocked: ['kick', 'arp', 'bass'] }, { drops: 1, maxedVoices: 3 }), ['hats', 'lead']);
+test('v2 unlocks', () => {
+  assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 610, won: false, evolved: 0 }), ['bass','lead']);
+  assert.deepEqual(checkUnlocks({ unlocked: ['kick','arp'] }, { seconds: 900, won: true, evolved: 1 }), ['bass','lead','pad','hats']);
+});
+test('v1 save still loads', () => {
+  const s = { getItem: () => JSON.stringify({ unlocked: ['kick','arp','bass'], best: 4 }) };
+  assert.deepEqual(load(s), { unlocked: ['kick','arp','bass'], best: 4 });
 });
 test('load sanitizes unlocked and best', () => {
   const s = v => ({ getItem: () => JSON.stringify(v) });

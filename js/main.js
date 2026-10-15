@@ -8,7 +8,7 @@ import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
 import { createDraw } from './draw.js';
 const c = document.getElementById('game'), g = c.getContext('2d'), d = createDraw(g);
-const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results');
+const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results'), hud = document.getElementById('hud');
 const levelup = document.getElementById('levelup'), cardsEl = document.getElementById('cards');
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
@@ -152,12 +152,17 @@ function endRun() {
   clock.stop(); picking = false; levelup.hidden = true; audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(audio.master.gain.value, ac.currentTime); audio.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.1); gameOver = true; endedAt = performance.now(); showResults();
 }
 
+const mmss = s => { s = Math.floor(s); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+
 function showResults() {
-  const maxedVoices = [...progress.voices.values()].filter(l => l >= 5).length;
-  const fresh = checkUnlocks(data, { drops: run.drops, maxedVoices });
-  data.unlocked.push(...fresh); data.best = Math.max(data.best, run.drops); save(store, data);
-  results.innerHTML = `<h2>&gt; ${run.won ? 'set complete' : 'harmony lost'}</h2><p>drops survived: ${run.drops}</p><p>best: ${data.best}</p>`
-    + (fresh.length ? `<p>unlocked: ${fresh.join(', ')}</p>` : '') + '<p>tap to play again</p>';
+  const fresh = checkUnlocks(data, { seconds: run.elapsed, won: run.won, evolved: progress.evolved.size });
+  data.unlocked.push(...fresh); data.best = Math.max(data.best, Math.floor(run.elapsed)); save(store, data);
+  results.replaceChildren();
+  const add = (tag, text) => results.append(Object.assign(document.createElement(tag), { textContent: text }));
+  add('h2', run.won ? 'set complete' : 'harmony lost');
+  add('p', 'time survived: ' + mmss(run.elapsed)); add('p', 'level: ' + progress.level); add('p', 'best: ' + mmss(data.best));
+  if (fresh.length) add('p', 'unlocked: ' + fresh.join(', '));
+  add('p', 'tap to play again');
   results.hidden = false;
 }
 

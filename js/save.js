@@ -1,6 +1,6 @@
 import { VOICES } from './voices.js';
 const KEY = 'grn', DEFAULT = () => ({ unlocked: ['kick', 'arp'], best: 0 });
-const RULES = [['bass', s => s.drops >= 1], ['pad', s => s.drops >= 3], ['hats', s => s.maxedVoices >= 1], ['lead', s => s.maxedVoices >= 3]];
+const RULES = [['bass', s => s.seconds >= 300], ['lead', s => s.seconds >= 600], ['pad', s => s.won], ['hats', s => s.evolved >= 1]];
 
 export function load(storage) {
   try {
