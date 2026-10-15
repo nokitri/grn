@@ -5,7 +5,8 @@ import { VOICES, createLoadout } from './voices.js';
 import { ENEMIES, spawnWave, makeEnemy } from './enemies.js';
 import { readMove, onPause } from './input.js';
 import { load, save, checkUnlocks } from './save.js';
-const c = document.getElementById('game'), g = c.getContext('2d');
+import { createDraw } from './draw.js';
+const c = document.getElementById('game'), g = c.getContext('2d'), d = createDraw(g);
 const start = document.getElementById('start'), pauseEl = document.getElementById('pause'), results = document.getElementById('results');
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const player = { x: 0, y: 0, r: 10, speed: 240 };
@@ -13,7 +14,7 @@ let store; try { store = localStorage; } catch {} // access itself can throw
 const data = load(store);
 let w, h, ac, clock, run, audio, loadout, paused = false, last = 0;
 let endedAt = 0, lastPhase = null, cycle = 0, invuln = 0, gameOver = false, t0 = 0;
-const enemies = [], shots = [], queue = [], orbs = [], hostile = [], parts = [];
+const enemies = [], shots = [], queue = [], orbs = [], hostile = [];
 const dir = { x: 0, y: -1 }, beamDir = { x: 0, y: -1 }; // last move direction; beam eases toward it
 
 function onPhase(phase, time) {
@@ -27,6 +28,7 @@ function onPhase(phase, time) {
     enemies.push(...spawnWave('build', cycle, w, h));
     audio.riser(time, stepDur * 64);
   } else {
+    d.setHue(cycle);
     for (const e of enemies) e.held = false;
     audio.setFilter(1, time);
   }
@@ -57,7 +59,8 @@ function onStep(step, time) {
 
 function fire({ v, level }) {
   const dmg = v.damage(level), x = player.x, y = player.y;
-  const shot = (vx, vy, life, kind) => shots.push({ x, y, vx, vy, dmg, life, kind });
+  const shot = (vx, vy, life, kind) => shots.push({ x, y, vx, vy, dmg, life, kind, level });
+  if (v === VOICES.kick && lastPhase === 'drop') d.kickFlash();
   const aim = speed => {
     let t = null, d = Infinity;
     for (const e of enemies) { const q = (e.x - x) ** 2 + (e.y - y) ** 2; if (q < d) { d = q; t = e; } }
@@ -102,7 +105,7 @@ function hurt() {
   invuln = 1;
   const over = run.hit(0.1);
   audio.detune(1 - run.harmony);
-  if (over) { clock.stop(); gameOver = true; endedAt = performance.now(); showResults(); }
+  if (over) { clock.stop(); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(audio.master.gain.value, ac.currentTime); audio.master.gain.linearRampToValueAtTime(0, ac.currentTime + 0.1); gameOver = true; endedAt = performance.now(); showResults(); }
 }
 
 function showResults() {
@@ -122,7 +125,7 @@ function updateEnemies(dt) {
     const e = enemies[i], def = ENEMIES[e.type];
     if (e.hp <= 0) {
       enemies.splice(i, 1);
-      for (let k = 0; k < (still ? 4 : 8); k++) { const a = Math.random() * 2 * Math.PI, v = 80 + Math.random() * 160; parts.push({ x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.4 }); }
+      d.burst(e.x, e.y, still ? 4 : 8);
       audio.blip(SCALE[Math.floor(Math.random() * SCALE.length)] + 24, nextStep);
       def.onDeath?.(e, (type, x, y) => enemies.push(makeEnemy(type, x, y, cycle)));
       continue;
@@ -136,25 +139,25 @@ function updateEnemies(dt) {
     if (b.life <= 0) hostile.splice(i, 1);
   }
   for (let i = orbs.length - 1; i >= 0; i--) if (Math.hypot(orbs[i].x - player.x, orbs[i].y - player.y) < player.r + 10) { loadout.add(orbs[i].name); orbs.splice(i, 1); }
-  for (let i = parts.length - 1; i >= 0; i--) { const q = parts[i]; q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; if (q.life <= 0) parts.splice(i, 1); }
 }
 
 function drawShots() {
   for (const s of shots) {
     g.beginPath();
-    if (s.kind === 'ring') g.arc(s.x, s.y, ringR(s), 0, 2 * Math.PI);
+    const echo = s.level >= 3; // voice level 3+ adds a visual layer
+    if (s.kind === 'ring') { g.arc(s.x, s.y, ringR(s), 0, 2 * Math.PI); if (echo) { const m = 20 + s.life * 400; g.moveTo(s.x + m, s.y); g.arc(s.x, s.y, m, 0, 2 * Math.PI); } } // mirrored: contracts as the first expands
     else if (s.kind === 'field') { g.globalAlpha = s.life * 0.4; g.arc(s.x, s.y, 120, 0, 2 * Math.PI); }
-    else if (s.kind === 'beam') { g.moveTo(s.x, s.y); g.lineTo(s.x + s.vx * 300, s.y + s.vy * 300); }
-    else { const k = s.kind === 'pierce' ? 0.06 : 0.02; g.moveTo(s.x, s.y); g.lineTo(s.x - s.vx * k, s.y - s.vy * k); }
+    else if (s.kind === 'beam') { g.moveTo(s.x, s.y); g.lineTo(s.x + s.vx * 300, s.y + s.vy * 300); if (echo) { const ex = s.x - s.vy * 6, ey = s.y + s.vx * 6; g.moveTo(ex, ey); g.lineTo(ex + s.vx * 300, ey + s.vy * 300); } }
+    else { const k = s.kind === 'pierce' ? 0.06 : s.kind === 'bolt' && echo ? 0.06 : 0.02; g.moveTo(s.x, s.y); g.lineTo(s.x - s.vx * k, s.y - s.vy * k); }
     g.stroke(); g.globalAlpha = 1;
   }
 }
 
 function drawWorld(t) {
+  g.shadowBlur = d.glow ? 16 : 0;
   for (const e of enemies) ENEMIES[e.type].draw(g, e, t);
   for (const b of hostile) { g.beginPath(); g.arc(b.x, b.y, 3, 0, 2 * Math.PI); g.fill(); }
-  for (const q of parts) { g.globalAlpha = q.life / 0.4; g.beginPath(); g.moveTo(q.x, q.y); g.lineTo(q.x - q.vx * 0.04, q.y - q.vy * 0.04); g.stroke(); }
-  g.globalAlpha = 1; g.font = '16px VT323, monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '16px VT323, monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
   for (const o of orbs) { g.beginPath(); g.arc(o.x, o.y, 10, 0, 2 * Math.PI); g.stroke(); g.fillText(o.name[0], o.x, o.y + 1); }
 }
 
@@ -175,20 +178,23 @@ function frame(t) {
     invuln -= dt;
     updateShots(dt); updateEnemies(dt);
   }
-  g.shadowBlur = 0; // else the fade rect itself glows
-  g.fillStyle = still ? 'rgba(5,5,5,.4)' : 'rgba(5,5,5,.18)'; g.fillRect(0, 0, w, h);
+  d.fade();
+  const live = !paused && !gameOver, bar = Math.floor(Math.max(0, ac.currentTime - t0) / (stepDur * 16));
+  d.background(t / 1000, lastPhase, Math.floor(bar / 2) % 4, 1 - ((Math.max(0, ac.currentTime - t0) / stepDur) % 4) / 4); // pulse 1 on each beat (kick step), decays over the beat
   const P = '#ff4fd8', r = player.r;
   g.shadowColor = P; g.shadowBlur = 16; g.fillStyle = P; g.strokeStyle = P; g.lineWidth = 3;
   g.globalAlpha = invuln > 0 && !still && Math.floor(t / 80) % 2 ? 0.3 : 1; // blink while invulnerable
   g.beginPath(); g.moveTo(player.x, player.y - r); g.lineTo(player.x + r, player.y); g.lineTo(player.x, player.y + r); g.lineTo(player.x - r, player.y); g.fill();
   g.globalAlpha = 1;
-  drawShots(); drawWorld(t / 1000);
+  drawShots(); drawWorld(t / 1000); d.particles(live ? dt : 0);
+  g.shadowBlur = 16; g.strokeStyle = P;
   g.beginPath(); g.arc(player.x, player.y, r + 10, -Math.PI / 2, -Math.PI / 2 + run.harmony * 2 * Math.PI); g.stroke();
   g.shadowBlur = 0;
 }
 
 function reset() {
-  for (const a of [enemies, shots, queue, orbs, hostile, parts]) a.length = 0;
+  for (const a of [enemies, shots, queue, orbs, hostile]) a.length = 0;
+  d.clear(); d.setHue(0); audio.master.gain.cancelScheduledValues(ac.currentTime); audio.master.gain.setValueAtTime(0.5, ac.currentTime);
   run = createRun(); loadout = createLoadout(); audio.detune(0);
   lastPhase = null; cycle = 0; invuln = 0; gameOver = false; results.hidden = true;
   player.x = w / 2; player.y = h / 2;
